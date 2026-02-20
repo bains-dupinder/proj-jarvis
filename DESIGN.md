@@ -76,7 +76,7 @@ Build Jarvis from scratch, inspired by [OpenClaw](https://github.com/openclaw/op
 - Shared-token authentication (timing-safe)
 - Two AI providers: Anthropic Claude, OpenAI GPT (common streaming interface)
 - Session management with JSONL transcripts
-- Tool execution: bash tool with approval workflow
+- Tool execution: bash tool + browser tool, both with approval workflow
 - Persistent memory: SQLite + sqlite-vec, hybrid BM25 + vector search
 - Web UI: Lit web components, WebSocket client, markdown rendering
 - Audit logging of all tool executions and auth events
@@ -146,10 +146,11 @@ proj-jarvis/
 │   │       └── openai.ts          # OpenAI SDK  → AsyncIterable<ChatEvent>
 │   │
 │   ├── tools/
-│   │   ├── types.ts               # Tool, ToolResult, ApprovalRequest
+│   │   ├── types.ts               # Tool, ToolResult, ApprovalRequest, ToolProgress
 │   │   ├── approval.ts            # Pending approval map + Promise API
+│   │   ├── registry.ts            # ToolRegistry: register + lookup
 │   │   ├── bash.ts                # BashTool: spawn, buffer, timeout
-│   │   └── registry.ts            # ToolRegistry: register + lookup
+│   │   └── browser.ts             # BrowserTool: Playwright, screenshot, navigate, click
 │   │
 │   ├── memory/
 │   │   ├── db.ts                  # Open SQLite + load sqlite-vec
@@ -247,7 +248,8 @@ Server responds `{ "type": "auth", "ok": true }` or closes the connection.
 | `chat.delta` | `{ runId, text }` | Each text chunk from model |
 | `chat.final` | `{ runId, usage: { inputTokens, outputTokens } }` | Generation complete |
 | `chat.error` | `{ runId, message }` | Generation failed |
-| `exec.approval_request` | `{ approvalId, command, workingDir }` | Bash tool triggered |
+| `exec.approval_request` | `{ approvalId, toolName, summary, details }` | Any tool requiring approval |
+| `tool.progress` | `{ runId, tool, message }` | Mid-execution status update |
 
 ---
 
@@ -287,27 +289,60 @@ interface ModelProvider {
 
 ### Tool Interface
 
+The `Tool` interface is the single contract every tool must satisfy. Adding a new tool means creating one file that implements this interface and registering it — nothing else changes.
+
 ```typescript
 interface ToolContext {
   sessionKey: string
   sendEvent: (event: string, data: unknown) => void  // push to WS client
+  reportProgress: (message: string) => void          // stream status updates
   config: Config
 }
 
 interface Tool {
-  name: string
-  description: string
-  inputSchema: z.ZodSchema
-  requiresApproval: boolean
+  name: string                      // unique identifier, e.g. "bash", "browser"
+  description: string               // shown to AI model in system prompt
+  inputSchema: z.ZodSchema          // validated before execute() is called
+  requiresApproval: boolean         // if true, user must approve before execute()
   execute(input: unknown, context: ToolContext): Promise<ToolResult>
 }
 
 interface ToolResult {
-  output: string
+  output: string                    // text returned to the model
+  attachments?: ToolAttachment[]    // optional binary outputs (screenshots, files)
   exitCode?: number
   truncated?: boolean
 }
+
+interface ToolAttachment {
+  type: 'image' | 'file'
+  mimeType: string                  // e.g. 'image/png'
+  data: string                      // base64-encoded
+  name?: string
+}
 ```
+
+#### How to add a new tool (3 steps)
+1. Create `src/tools/<name>.ts` implementing `Tool`
+2. Register it in `src/gateway/server.ts`: `toolRegistry.register(new MyTool(...))`
+3. Add a description to `workspace/TOOLS.md` so the AI model knows it exists
+
+No changes needed to the gateway, agent runner, approval flow, or RPC methods.
+
+#### Built-in tools (POC)
+
+| Tool | File | Approval | Description |
+|---|---|---|---|
+| `bash` | `tools/bash.ts` | ✅ required | Run shell commands, read files, run scripts |
+| `browser` | `tools/browser.ts` | ✅ required | Control a browser via Playwright |
+
+#### Progress streaming
+
+`context.reportProgress(message)` sends a `tool.progress` push event to the UI:
+```json
+{ "event": "tool.progress", "data": { "runId": "...", "tool": "browser", "message": "Navigating to https://example.com..." } }
+```
+The UI renders these as inline status lines below the in-progress assistant message. This is especially important for the browser tool where individual actions can take seconds each.
 
 ---
 
@@ -319,7 +354,9 @@ AgentRunner receives tool_call event from model
   ├─ Generate approvalId via crypto.randomUUID()
   │
   ├─ Push exec.approval_request event to WS client
-  │     { approvalId, command, workingDir }
+  │     { approvalId, toolName, summary, details }
+  │     e.g. bash: { toolName:"bash", summary:"echo hello", details:{command,workingDir} }
+  │          browser: { toolName:"browser", summary:"Navigate to google.com", details:{actions} }
   │
   ├─ Register pending Promise in approval.ts map
   │     pendingApprovals.set(approvalId, { resolve, reject })
@@ -453,6 +490,7 @@ Environment overrides (all optional):
 | 1 | `docs/phases/phase-1-scaffold.md` | Server starts, `/health` OK, bad tokens rejected |
 | 2 | `docs/phases/phase-2-agents.md` | `chat.send` streams real AI responses |
 | 3 | `docs/phases/phase-3-sessions.md` | Multi-session chat, history survives restart |
-| 4 | `docs/phases/phase-4-tools.md` | Agent runs bash commands after user approval |
+| 4 | `docs/phases/phase-4-tools.md` | Bash tool with approval, audit log, secrets filter, extensible registry |
+| 4b | `docs/phases/phase-4b-browser-tool.md` | Browser control via Playwright (navigate, click, screenshot) |
 | 5 | `docs/phases/phase-5-memory.md` | Agent recalls context from past sessions |
 | 6 | `docs/phases/phase-6-ui.md` | Full browser UI, end-to-end |

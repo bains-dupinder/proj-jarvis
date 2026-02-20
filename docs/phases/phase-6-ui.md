@@ -15,7 +15,7 @@ A full browser interface at `http://localhost:5173`: enter a token, chat with th
 ### `ui/package.json`
 ```json
 {
-  "name": "virtual-assistant-ui",
+  "name": "jarvis-ui",
   "private": true,
   "type": "module",
   "scripts": {
@@ -69,7 +69,7 @@ export default defineConfig({
   <title>Virtual Assistant</title>
 </head>
 <body>
-  <va-app></va-app>
+  <jarvis-app></jarvis-app>
   <script type="module" src="/src/app.ts"></script>
 </body>
 </html>
@@ -127,7 +127,7 @@ export default defineConfig({
 
 ### `ui/src/components/markdown-renderer.ts`
 - Purpose: safely render markdown to HTML inside a shadow DOM slot
-- Custom element: `<va-markdown>`
+- Custom element: `<jarvis-markdown>`
 - Key attributes/properties: `content: string`
 - Implementation notes:
   - `marked.parse(content)` → raw HTML string
@@ -140,13 +140,13 @@ export default defineConfig({
 
 ### `ui/src/components/message-item.ts`
 - Purpose: render a single chat message (user or assistant)
-- Custom element: `<va-message-item>`
+- Custom element: `<jarvis-message-item>`
 - Properties: `role: 'user' | 'assistant'`, `content: string`, `streaming?: boolean`
 - Template:
   ```html
   <div class="message message--${role}">
     <div class="role-label">${role}</div>
-    <va-markdown .content=${content}></va-markdown>
+    <jarvis-markdown .content=${content}></jarvis-markdown>
     ${streaming ? html`<span class="cursor">▋</span>` : ''}
   </div>
   ```
@@ -156,7 +156,7 @@ export default defineConfig({
 
 ### `ui/src/components/message-list.ts`
 - Purpose: display a scrollable list of messages
-- Custom element: `<va-message-list>`
+- Custom element: `<jarvis-message-list>`
 - Properties: `messages: Array<{ role, content, streaming? }>`
 - Implementation notes:
   - Use `@state()` internally for the message array
@@ -170,7 +170,7 @@ export default defineConfig({
 
 ### `ui/src/components/input-bar.ts`
 - Purpose: text input for composing messages
-- Custom element: `<va-input-bar>`
+- Custom element: `<jarvis-input-bar>`
 - Properties: `disabled: boolean`
 - Events emitted: `send` (CustomEvent with `{ message: string }`)
 - Template:
@@ -193,7 +193,7 @@ export default defineConfig({
 
 ### `ui/src/components/approval-dialog.ts`
 - Purpose: modal dialog shown when the assistant requests tool approval
-- Custom element: `<va-approval-dialog>`
+- Custom element: `<jarvis-approval-dialog>`
 - Properties: `approvalId: string`, `command: string`, `workingDir: string`, `visible: boolean`
 - Events emitted: `approve` (CustomEvent with `{ approvalId }`), `deny` (CustomEvent with `{ approvalId, reason? }`)
 - Template:
@@ -218,7 +218,7 @@ export default defineConfig({
 
 ### `ui/src/components/session-list.ts`
 - Purpose: sidebar list of past sessions
-- Custom element: `<va-session-list>`
+- Custom element: `<jarvis-session-list>`
 - Properties: `sessions: SessionMeta[]`, `activeKey: string | null`
 - Events emitted: `session-select` (CustomEvent with `{ sessionKey }`), `session-new`
 - Template: list of session items with creation date, new session button at top
@@ -227,7 +227,7 @@ export default defineConfig({
 
 ### `ui/src/components/chat-view.ts`
 - Purpose: compose the full chat experience — messages, input, approval dialog
-- Custom element: `<va-chat-view>`
+- Custom element: `<jarvis-chat-view>`
 - Properties: `client: WsClient`, `sessionKey: string`
 - Internal state: `messages[]`, `streaming: boolean`, `pendingApproval: ApprovalRequest | null`
 - On mount (`connectedCallback`):
@@ -236,12 +236,12 @@ export default defineConfig({
   3. Subscribe to `chat.final` → `messageList.finishRun(runId)`, `streaming = false`, enable input
   4. Subscribe to `chat.error` → show error, `streaming = false`, enable input
   5. Subscribe to `exec.approval_request` → set `pendingApproval`, show dialog
-- On send event from `<va-input-bar>`:
+- On send event from `<jarvis-input-bar>`:
   1. Disable input bar (`streaming = true`)
   2. Add user message to list optimistically
   3. Call `client.request('chat.send', { sessionKey, message })`
   4. Add empty assistant message (streaming) to list with the returned `runId`
-- On approve from `<va-approval-dialog>`:
+- On approve from `<jarvis-approval-dialog>`:
   - Call `client.request('exec.approve', { approvalId })`; clear `pendingApproval`
 - On deny:
   - Call `client.request('exec.deny', { approvalId })`; clear `pendingApproval`
@@ -250,7 +250,7 @@ export default defineConfig({
 
 ### `ui/src/app.ts`
 - Purpose: root application component — auth gate, session sidebar, chat view
-- Custom element: `<va-app>`
+- Custom element: `<jarvis-app>`
 - Internal state: `authenticated: boolean`, `client: WsClient | null`, `sessions: SessionMeta[]`, `activeSessionKey: string | null`
 - On mount:
   1. Check `getToken()` — if present, attempt to connect and authenticate
@@ -264,7 +264,7 @@ export default defineConfig({
   ```
 - After auth:
   1. Load sessions: `client.request('sessions.list')`
-  2. Render: sidebar with `<va-session-list>` + main area with `<va-chat-view>`
+  2. Render: sidebar with `<jarvis-session-list>` + main area with `<jarvis-chat-view>`
 - On `session-new`: `client.request('sessions.create')` → add to list, switch active session
 - On `session-select`: switch `activeSessionKey`
 

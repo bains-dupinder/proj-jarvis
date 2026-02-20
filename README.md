@@ -1,6 +1,6 @@
-# Virtual Assistant
+# Proj Jarvis
 
-A local-first AI assistant with a web UI, streaming responses, tool execution with user approval, and persistent semantic memory.
+A local-first AI assistant (Jarvis) with a web UI, streaming responses, tool execution with user approval, and persistent semantic memory.
 
 Inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s architecture, built from scratch with a minimal and auditable codebase.
 
@@ -36,12 +36,12 @@ See [DESIGN.md](./DESIGN.md) for the full architecture document.
 ```bash
 # 1. Clone and install
 git clone <repo-url>
-cd virtual-assistant
+cd proj-jarvis
 pnpm install
 
 # 2. Configure
 cp .env.example .env
-# Edit .env — set VIRTUAL_ASSISTANT_TOKEN and at least one AI API key
+# Edit .env — set PROJ_JARVIS_TOKEN and at least one AI API key
 
 # 3. Start the gateway
 pnpm dev
@@ -73,7 +73,7 @@ cd ui && pnpm install && pnpm dev
 - All WebSocket connections require a shared token (timing-safe comparison)
 - Every bash command requires explicit user approval before execution
 - Tool output is filtered for secrets before storage or display
-- All tool executions are recorded in an append-only audit log (`~/.virtual-assistant/audit.jsonl`)
+- All tool executions are recorded in an append-only audit log (`~/.proj-jarvis/audit.jsonl`)
 - All rendered HTML passes through DOMPurify
 
 ---
@@ -81,7 +81,7 @@ cd ui && pnpm install && pnpm dev
 ## Project Structure
 
 ```
-virtual-assistant/
+proj-jarvis/
 ├── DESIGN.md          ← architecture & interface specification
 ├── docs/phases/       ← per-phase implementation instructions
 ├── src/               ← backend (Node.js + TypeScript)
@@ -96,10 +96,10 @@ virtual-assistant/
 
 ## Data Directory
 
-All persistent data lives in `~/.virtual-assistant/`:
+All persistent data lives in `~/.proj-jarvis/`:
 
 ```
-~/.virtual-assistant/
+~/.proj-jarvis/
 ├── config.json        ← configuration (auto-created with defaults)
 ├── memory.db          ← SQLite database (sessions + embeddings)
 ├── audit.jsonl        ← append-only audit log

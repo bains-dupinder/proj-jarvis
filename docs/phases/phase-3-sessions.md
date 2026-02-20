@@ -5,7 +5,7 @@ Multi-session chat works end-to-end: create a session, send messages, retrieve h
 
 ## Prerequisites
 - Phase 2 complete and passing verification
-- `~/.virtual-assistant/sessions/` directory exists (auto-created by `getDataDir()`)
+- `~/.proj-jarvis/sessions/` directory exists (auto-created by `getDataDir()`)
 
 ---
 
@@ -229,6 +229,6 @@ wscat -c ws://localhost:18789
 # Expected: full message history restored
 
 # 11. Verify JSONL on disk
-cat ~/.virtual-assistant/sessions/<uuid>.jsonl
+cat ~/.proj-jarvis/sessions/<uuid>.jsonl
 # Expected: one JSON object per line
 ```

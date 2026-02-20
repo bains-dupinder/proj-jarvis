@@ -265,7 +265,7 @@ wscat -c ws://localhost:18789
 # the search mechanism works at the RPC level.
 
 # 6. Inspect the database
-sqlite3 ~/.virtual-assistant/memory.db
+sqlite3 ~/.proj-jarvis/memory.db
 .tables
 # Expected: files  chunks  chunks_fts  embedding_cache
 SELECT count(*) FROM chunks;

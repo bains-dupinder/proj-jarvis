@@ -1,4 +1,4 @@
-# Virtual Assistant — Design Document
+# Proj Jarvis — Design Document
 
 > **Status**: POC design, pre-implementation.
 > This document is the single source of truth for architecture and interfaces.
@@ -8,7 +8,7 @@
 
 ## Context
 
-Build a virtual assistant from scratch, inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s architecture but not derived from it. OpenClaw's core insight: a **local gateway server** speaks JSON-over-WebSocket to a web UI, with a clean provider abstraction for AI models, markdown-defined agent personalities, and a tool-execution approval workflow. We replicate these patterns with a minimal, auditable codebase.
+Build Jarvis from scratch, inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s architecture but not derived from it. OpenClaw's core insight: a **local gateway server** speaks JSON-over-WebSocket to a web UI, with a clean provider abstraction for AI models, markdown-defined agent personalities, and a tool-execution approval workflow. We replicate these patterns with a minimal, auditable codebase.
 
 ---
 
@@ -28,7 +28,7 @@ Build a virtual assistant from scratch, inspired by [OpenClaw](https://github.co
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Browser (localhost:5173)                               │
-│  Lit web components — <va-app>, <va-chat>, etc.         │
+│  Lit web components — <jarvis-app>, <jarvis-chat>, etc. │
 │  WebSocket client (JSON-RPC over ws://)                 │
 └────────────────────┬────────────────────────────────────┘
                      │ ws://localhost:18789
@@ -36,7 +36,7 @@ Build a virtual assistant from scratch, inspired by [OpenClaw](https://github.co
 │  Gateway Server (Node.js)                               │
 │  HTTP: health check, serve static UI (prod)             │
 │  WebSocket: JSON-RPC methods + server-push events       │
-│  Auth: shared token (VIRTUAL_ASSISTANT_TOKEN env var)   │
+│  Auth: shared token (PROJ_JARVIS_TOKEN env var)         │
 │                                                         │
 │  Methods: chat.send, chat.history, chat.abort           │
 │           agents.list, sessions.list/create/get         │
@@ -97,7 +97,7 @@ Build a virtual assistant from scratch, inspired by [OpenClaw](https://github.co
 ## Project Structure
 
 ```
-virtual-assistant/
+proj-jarvis/
 ├── DESIGN.md                      ← this file
 ├── README.md
 ├── package.json                   # type: module, root scripts
@@ -120,7 +120,7 @@ virtual-assistant/
 │   ├── config/
 │   │   ├── schema.ts              # Zod config schema (5 groups)
 │   │   ├── loader.ts              # Load config.json + env overrides
-│   │   └── paths.ts               # ~/.virtual-assistant/ helpers
+│   │   └── paths.ts               # ~/.proj-jarvis/ helpers
 │   │
 │   ├── gateway/
 │   │   ├── server.ts              # startServer() → { close() }
@@ -173,16 +173,16 @@ virtual-assistant/
 │   ├── vite.config.ts             # proxy /ws → localhost:18789
 │   ├── index.html
 │   └── src/
-│       ├── app.ts                 # <va-app> root + router
+│       ├── app.ts                 # <jarvis-app> root + router
 │       ├── ws-client.ts           # WsClient: connect, RPC, events
 │       ├── auth-store.ts          # Token in sessionStorage
 │       └── components/
-│           ├── chat-view.ts       # <va-chat-view>
-│           ├── message-list.ts    # <va-message-list>
-│           ├── message-item.ts    # <va-message-item>
-│           ├── input-bar.ts       # <va-input-bar>
-│           ├── approval-dialog.ts # <va-approval-dialog>
-│           ├── session-list.ts    # <va-session-list>
+│           ├── chat-view.ts       # <jarvis-chat-view>
+│           ├── message-list.ts    # <jarvis-message-list>
+│           ├── message-item.ts    # <jarvis-message-item>
+│           ├── input-bar.ts       # <jarvis-input-bar>
+│           ├── approval-dialog.ts # <jarvis-approval-dialog>
+│           ├── session-list.ts    # <jarvis-session-list>
 │           └── markdown-renderer.ts # Marked + DOMPurify
 │
 ├── workspace/                     # User-editable agent definitions
@@ -217,7 +217,7 @@ All frames are plain JSON. Three frame types:
 
 Authentication: the **first** message after WS upgrade must be:
 ```json
-{ "type": "auth", "token": "<VIRTUAL_ASSISTANT_TOKEN>" }
+{ "type": "auth", "token": "<PROJ_JARVIS_TOKEN>" }
 ```
 Server responds `{ "type": "auth", "ok": true }` or closes the connection.
 
@@ -324,7 +324,7 @@ AgentRunner receives tool_call event from model
   ├─ Register pending Promise in approval.ts map
   │     pendingApprovals.set(approvalId, { resolve, reject })
   │
-  ├─ UI shows <va-approval-dialog> — command + working dir visible
+  ├─ UI shows <jarvis-approval-dialog> — command + working dir visible
   │
   ├─ User clicks Approve → client sends exec.approve { approvalId }
   │        OR Deny   → client sends exec.deny   { approvalId, reason? }
@@ -345,7 +345,7 @@ AgentRunner receives tool_call event from model
 ## Memory Architecture
 
 ```
-SQLite DB: ~/.virtual-assistant/memory.db
+SQLite DB: ~/.proj-jarvis/memory.db
 
 Tables:
   files           (path TEXT PK, hash TEXT, indexed_at INTEGER)
@@ -398,17 +398,17 @@ const Config = z.object({
 type Config = z.infer<typeof Config>
 ```
 
-Config file: `~/.virtual-assistant/config.json` (auto-created with defaults on first run)
+Config file: `~/.proj-jarvis/config.json` (auto-created with defaults on first run)
 
 Environment overrides (all optional):
 
 | Variable | Config field |
 |---|---|
-| `VIRTUAL_ASSISTANT_TOKEN` | auth token (required if auth enabled) |
+| `PROJ_JARVIS_TOKEN` | auth token (required if auth enabled) |
 | `ANTHROPIC_API_KEY` | Anthropic provider |
 | `OPENAI_API_KEY` | OpenAI provider |
-| `VIRTUAL_ASSISTANT_PORT` | `gateway.port` |
-| `VIRTUAL_ASSISTANT_HOST` | `gateway.host` |
+| `PROJ_JARVIS_PORT` | `gateway.port` |
+| `PROJ_JARVIS_HOST` | `gateway.host` |
 
 ---
 

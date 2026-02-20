@@ -6,7 +6,7 @@ The server starts on `localhost:18789`, `/health` returns `{"status":"ok"}`, and
 ## Prerequisites
 - Node.js 22+ installed
 - pnpm installed (`npm i -g pnpm`)
-- `VIRTUAL_ASSISTANT_TOKEN` set in `.env` (copy from `.env.example`)
+- `PROJ_JARVIS_TOKEN` set in `.env` (copy from `.env.example`)
 
 ## Files to Create
 
@@ -64,10 +64,10 @@ The server starts on `localhost:18789`, `/health` returns `{"status":"ok"}`, and
 - Key exports:
   ```typescript
   export function getDataDir(): string
-  // Returns ~/.virtual-assistant/, creates it if absent (mkdirSync recursive)
+  // Returns ~/.proj-jarvis/, creates it if absent (mkdirSync recursive)
 
   export function getConfigFilePath(): string
-  // Returns ~/.virtual-assistant/config.json
+  // Returns ~/.proj-jarvis/config.json
 
   export function getSessionsDir(): string
   export function getAuditLogPath(): string
@@ -103,10 +103,10 @@ The server starts on `localhost:18789`, `/health` returns `{"status":"ok"}`, and
 - Implementation notes:
   - If `config.json` doesn't exist, use all Zod defaults (don't throw)
   - Env overrides (applied after JSON load):
-    - `VIRTUAL_ASSISTANT_PORT` → `gateway.port` (parse as integer)
-    - `VIRTUAL_ASSISTANT_HOST` → `gateway.host`
+    - `PROJ_JARVIS_PORT` → `gateway.port` (parse as integer)
+    - `PROJ_JARVIS_HOST` → `gateway.host`
   - Run `ConfigSchema.parse(merged)` — let Zod throw on bad config
-  - Store resolved token separately: read `VIRTUAL_ASSISTANT_TOKEN` from env (not stored in config file)
+  - Store resolved token separately: read `PROJ_JARVIS_TOKEN` from env (not stored in config file)
 
 ---
 
@@ -227,7 +227,7 @@ pnpm install
 
 # 2. Copy env and set token
 cp .env.example .env
-# Edit .env and set VIRTUAL_ASSISTANT_TOKEN=mysecrettoken
+# Edit .env and set PROJ_JARVIS_TOKEN=mysecrettoken
 
 # 3. Start server in dev mode
 pnpm dev

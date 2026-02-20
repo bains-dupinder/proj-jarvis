@@ -111,7 +111,7 @@ The agent can propose bash commands, the user must approve each one before it ru
   7. Enforce timeout: `setTimeout(() => child.kill('SIGTERM'), config.tools.timeout)`
   8. Return `{ output: buffered.toString('utf8'), exitCode, truncated }`
 - `sanitizedEnv()`: copy `process.env` but delete known-sensitive vars:
-  - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VIRTUAL_ASSISTANT_TOKEN`
+  - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `PROJ_JARVIS_TOKEN`
   - Any key matching `/_(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)$/i`
 - Security notes:
   - **Never** interpolate user strings into the command — the model provides the command, and it has already gone through the approval gate
@@ -189,7 +189,7 @@ The agent can propose bash commands, the user must approve each one before it ru
   - `sk-ant-[A-Za-z0-9-_]{20,}` — Anthropic API keys
   - `sk-[A-Za-z0-9]{20,}` — OpenAI API keys
   - `Bearer [A-Za-z0-9._-]{20,}` — Bearer tokens
-  - `\b(ANTHROPIC_API_KEY|OPENAI_API_KEY|VIRTUAL_ASSISTANT_TOKEN)=[^\s]+` — env var assignments
+  - `\b(ANTHROPIC_API_KEY|OPENAI_API_KEY|PROJ_JARVIS_TOKEN)=[^\s]+` — env var assignments
   - `ghp_[A-Za-z0-9]{36}` — GitHub personal access tokens
 - Implementation notes:
   - All patterns should be case-insensitive where appropriate
@@ -263,7 +263,7 @@ wscat -c ws://localhost:18789
 # Model should respond acknowledging the denial
 
 # 7. Verify audit log
-cat ~/.virtual-assistant/audit.jsonl
+cat ~/.proj-jarvis/audit.jsonl
 # Expected: JSON lines with ts, type: "tool_exec" or "tool_denied", sessionKey, command
 
 # 8. Test secrets filtering

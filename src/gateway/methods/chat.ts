@@ -7,6 +7,8 @@ import { buildSystemPrompt, getAgentModelRef } from '../../agents/prompt-builder
 import { runAgentTurn } from '../../agents/runner.js'
 import type { Message } from '../../agents/providers/types.js'
 import type { TranscriptEvent } from '../../sessions/transcript.js'
+import type { ToolContext } from '../../tools/types.js'
+import { filterSecrets } from '../../security/secrets-filter.js'
 
 const SendParams = z.object({
   sessionKey: z.string().uuid(),
@@ -36,7 +38,7 @@ function transcriptToMessages(events: TranscriptEvent[]): Message[] {
 }
 
 /**
- * chat.send — start a streaming AI response with full session persistence.
+ * chat.send — start a streaming AI response with full session persistence and tool support.
  */
 export const chatSend: MethodHandler = async (params, ctx) => {
   const parsed = SendParams.safeParse(params)
@@ -92,13 +94,21 @@ export const chatSend: MethodHandler = async (params, ctx) => {
   // Accumulate assistant text for transcript
   let assistantText = ''
 
+  // Build tool context for tool execution
+  const toolContext: ToolContext = {
+    sessionKey,
+    runId,
+    sendEvent: ctx.sendEvent,
+    config: ctx.config,
+  }
+
   // Fire and forget — streaming happens asynchronously via push events
   runAgentTurn({
     provider,
     model: modelRef.model,
     systemPrompt,
     messages,
-    tools: [], // Tools added in Phase 4
+    tools: ctx.toolRegistry.toDefinitions(),
     onEvent: (event) => {
       // Check if aborted
       if (controller.signal.aborted) return
@@ -123,6 +133,62 @@ export const chatSend: MethodHandler = async (params, ctx) => {
       if (event.type === 'error') {
         ctx.activeRuns.delete(runId)
         ctx.sendEvent('chat.error', { runId, message: event.message })
+      }
+    },
+    onToolCall: async (name, input, callId) => {
+      const tool = ctx.toolRegistry.get(name)
+      if (!tool) {
+        return `Error: Unknown tool "${name}"`
+      }
+
+      // Validate input
+      const validated = tool.inputSchema.safeParse(input)
+      if (!validated.success) {
+        return `Error: Invalid input for tool "${name}": ${validated.error.message}`
+      }
+
+      try {
+        const result = await tool.execute(validated.data, toolContext)
+
+        // Filter secrets from output
+        const filteredOutput = filterSecrets(result.output)
+
+        // Audit log
+        ctx.auditLogger.append({
+          ts: Date.now(),
+          type: 'tool_exec',
+          sessionKey,
+          details: {
+            tool: name,
+            input: typeof input === 'object' ? JSON.stringify(input) : String(input),
+            exitCode: result.exitCode,
+            truncated: result.truncated,
+            outputLength: filteredOutput.length,
+          },
+        }).catch(() => {})
+
+        // Persist tool result to transcript
+        session.appendEvent({
+          role: 'tool_result',
+          content: filteredOutput,
+          timestamp: Date.now(),
+          runId,
+          toolName: name,
+        }).catch(() => {})
+
+        return filteredOutput
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Tool execution failed'
+
+        // Audit denied/failed tools
+        ctx.auditLogger.append({
+          ts: Date.now(),
+          type: 'tool_denied',
+          sessionKey,
+          details: { tool: name, error: errMsg },
+        }).catch(() => {})
+
+        return `Error: ${errMsg}`
       }
     },
   }).catch((err) => {

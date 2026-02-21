@@ -6,7 +6,11 @@ import type { ModelProvider } from '../agents/providers/types.js'
 import { AnthropicProvider } from '../agents/providers/anthropic.js'
 import { OpenAIProvider } from '../agents/providers/openai.js'
 import { SessionManager } from '../sessions/manager.js'
-import { getSessionsDir } from '../config/paths.js'
+import { getSessionsDir, getAuditLogPath } from '../config/paths.js'
+import { ToolRegistry } from '../tools/registry.js'
+import { ApprovalManager } from '../tools/approval.js'
+import { BashTool } from '../tools/bash.js'
+import { AuditLogger } from '../security/audit.js'
 import { createHttpHandler } from './http-handler.js'
 import { createWsUpgradeHandler } from './ws-handler.js'
 import { MethodRegistry } from './methods/registry.js'
@@ -14,6 +18,7 @@ import { healthCheck } from './methods/health.js'
 import { agentsList } from './methods/agents.js'
 import { sessionsCreate, sessionsList, sessionsGet } from './methods/sessions.js'
 import { chatSend, chatHistory, chatAbort } from './methods/chat.js'
+import { execApprove, execDeny } from './methods/exec.js'
 
 export interface GatewayServer {
   close(): Promise<void>
@@ -49,6 +54,15 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   const sessionManager = new SessionManager(getSessionsDir())
   const activeRuns = new Map<string, AbortController>()
 
+  // Tool infrastructure
+  const approvalManager = new ApprovalManager()
+  const toolRegistry = new ToolRegistry()
+  const auditLogger = new AuditLogger(getAuditLogPath(), config.security.auditLog)
+
+  // Register tools
+  toolRegistry.register(new BashTool(approvalManager, config))
+  console.log(`  ✓ ${toolRegistry.all().length} tool(s) registered: ${toolRegistry.all().map(t => t.name).join(', ')}`)
+
   // Resolve workspace path
   const workspacePath = config.agents.workspacePath
     ? resolve(config.agents.workspacePath)
@@ -63,15 +77,18 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   methods.register('chat.send', chatSend)
   methods.register('chat.history', chatHistory)
   methods.register('chat.abort', chatAbort)
+  methods.register('exec.approve', execApprove)
+  methods.register('exec.deny', execDeny)
 
   const httpHandler = createHttpHandler(config)
   const server = createServer(httpHandler)
 
   const wss = new WebSocketServer({ noServer: true })
-  const upgradeHandler = createWsUpgradeHandler(
+  const upgradeHandler = createWsUpgradeHandler({
     wss, methods, config, token,
     providers, workspacePath, sessionManager, activeRuns,
-  )
+    toolRegistry, approvalManager, auditLogger,
+  })
 
   server.on('upgrade', upgradeHandler)
 

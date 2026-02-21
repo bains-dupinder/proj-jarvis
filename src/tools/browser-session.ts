@@ -45,7 +45,6 @@ export class BrowserSessionManager {
     const id = sessionId ?? randomUUID()
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 720 },
-      userAgent: 'ProjJarvis/1.0 (Headless Chromium)',
     })
     this.contexts.set(id, context)
     const page = await context.newPage()

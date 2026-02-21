@@ -52,6 +52,8 @@ type BrowserActionType = z.infer<typeof BrowserAction>
 // ── Security helpers ──
 
 const BLOCKED_SCHEMES = ['file:', 'chrome:', 'chrome-extension:', 'about:', 'javascript:']
+const NAVIGATION_COMMIT_TIMEOUT_MS = 20_000
+const NAVIGATION_DOMCONTENT_TIMEOUT_MS = 3_000
 
 function isUrlAllowed(url: string): boolean {
   try {
@@ -179,7 +181,13 @@ export class BrowserTool implements Tool {
       context.reportProgress(describeAction(action) + '...')
 
       try {
-        const result = await this.executeAction(page, action, attachments, screenshotCount)
+        const result = await this.executeAction(
+          page,
+          action,
+          attachments,
+          screenshotCount,
+          context.reportProgress,
+        )
         results.push(result.text)
         screenshotCount = result.screenshotCount
       } catch (err) {
@@ -205,6 +213,7 @@ export class BrowserTool implements Tool {
     action: BrowserActionType,
     attachments: ToolAttachment[],
     screenshotCount: number,
+    reportProgress: (message: string) => void,
   ): Promise<{ text: string; screenshotCount: number }> {
     switch (action.type) {
       case 'navigate': {
@@ -214,9 +223,28 @@ export class BrowserTool implements Tool {
             screenshotCount,
           }
         }
-        await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+        await page.goto(action.url, {
+          waitUntil: 'commit',
+          timeout: NAVIGATION_COMMIT_TIMEOUT_MS,
+        })
+        let domContentLoaded = true
+        try {
+          await page.waitForLoadState('domcontentloaded', {
+            timeout: NAVIGATION_DOMCONTENT_TIMEOUT_MS,
+          })
+        } catch {
+          domContentLoaded = false
+          reportProgress('Page still loading; continuing with available content.')
+        }
+        // Some sites never reach DOMContentLoaded under bot checks. Ensure body exists if possible.
+        await page.waitForSelector('body', { timeout: 4_000 }).catch(() => {})
         const title = await page.title()
-        return { text: `[navigate] Loaded: ${title} (${action.url})`, screenshotCount }
+        return {
+          text:
+            `[navigate] Loaded: ${title} (${action.url})` +
+            (domContentLoaded ? '' : ' [domcontentloaded timeout; continued after commit]'),
+          screenshotCount,
+        }
       }
 
       case 'click': {
@@ -250,12 +278,15 @@ export class BrowserTool implements Tool {
 
       case 'extract': {
         const selector = action.selector
+        await page.waitForSelector('body', { timeout: 4_000 }).catch(() => {})
         const text = await page.evaluate((sel) => {
           if (sel) {
             const el = document.querySelector(sel)
             return el?.textContent?.trim() ?? `No element found for "${sel}"`
           }
-          return document.body.innerText.trim()
+          const root = document.body ?? document.documentElement
+          if (!root) return 'No extractable text on page yet'
+          return root.innerText.trim()
         }, selector ?? null)
 
         // Truncate to a sensible limit

@@ -4,6 +4,9 @@ import type { WebSocket, WebSocketServer } from 'ws'
 import type { Config } from '../config/schema.js'
 import type { ModelProvider } from '../agents/providers/types.js'
 import type { SessionManager } from '../sessions/manager.js'
+import type { ToolRegistry } from '../tools/registry.js'
+import type { ApprovalManager } from '../tools/approval.js'
+import type { AuditLogger } from '../security/audit.js'
 import type { MethodContext } from './methods/types.js'
 import { MethodRegistry, RpcError } from './methods/registry.js'
 import { verifyToken } from './auth.js'
@@ -28,16 +31,21 @@ function isLocalhostOrigin(origin: string): boolean {
   }
 }
 
-export function createWsUpgradeHandler(
-  wss: WebSocketServer,
-  methods: MethodRegistry,
-  config: Config,
-  token: string,
-  providers: Map<string, ModelProvider>,
-  workspacePath: string,
-  sessionManager: SessionManager,
-  activeRuns: Map<string, AbortController>,
-) {
+export interface WsHandlerDeps {
+  wss: WebSocketServer
+  methods: MethodRegistry
+  config: Config
+  token: string
+  providers: Map<string, ModelProvider>
+  workspacePath: string
+  sessionManager: SessionManager
+  activeRuns: Map<string, AbortController>
+  toolRegistry: ToolRegistry
+  approvalManager: ApprovalManager
+  auditLogger: AuditLogger
+}
+
+export function createWsUpgradeHandler(deps: WsHandlerDeps) {
   return (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     // Check Origin header — reject non-localhost origins
     const origin = req.headers['origin']
@@ -47,23 +55,14 @@ export function createWsUpgradeHandler(
       return
     }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req)
-      handleConnection(ws, methods, config, token, providers, workspacePath, sessionManager, activeRuns)
+    deps.wss.handleUpgrade(req, socket, head, (ws) => {
+      deps.wss.emit('connection', ws, req)
+      handleConnection(ws, deps)
     })
   }
 }
 
-function handleConnection(
-  ws: WebSocket,
-  methods: MethodRegistry,
-  config: Config,
-  token: string,
-  providers: Map<string, ModelProvider>,
-  workspacePath: string,
-  sessionManager: SessionManager,
-  activeRuns: Map<string, AbortController>,
-): void {
+function handleConnection(ws: WebSocket, deps: WsHandlerDeps): void {
   let authenticated = false
 
   const sendJson = (data: unknown) => {
@@ -93,7 +92,7 @@ function handleConnection(
         return
       }
 
-      if (!verifyToken(msg.token, token)) {
+      if (!verifyToken(msg.token, deps.token)) {
         sendJson({ type: 'auth', ok: false, error: 'invalid token' })
         ws.close(4401, 'unauthorized')
         return
@@ -117,10 +116,21 @@ function handleConnection(
       return
     }
 
-    const ctx: MethodContext = { sendEvent, config, token, providers, workspacePath, sessionManager, activeRuns }
+    const ctx: MethodContext = {
+      sendEvent,
+      config: deps.config,
+      token: deps.token,
+      providers: deps.providers,
+      workspacePath: deps.workspacePath,
+      sessionManager: deps.sessionManager,
+      activeRuns: deps.activeRuns,
+      toolRegistry: deps.toolRegistry,
+      approvalManager: deps.approvalManager,
+      auditLogger: deps.auditLogger,
+    }
 
     try {
-      const result = await methods.dispatch(method, params, ctx)
+      const result = await deps.methods.dispatch(method, params, ctx)
       sendJson({ id, result })
     } catch (err) {
       if (err instanceof RpcError) {

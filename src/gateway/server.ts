@@ -5,11 +5,15 @@ import type { Config } from '../config/schema.js'
 import type { ModelProvider } from '../agents/providers/types.js'
 import { AnthropicProvider } from '../agents/providers/anthropic.js'
 import { OpenAIProvider } from '../agents/providers/openai.js'
+import { SessionManager } from '../sessions/manager.js'
+import { getSessionsDir } from '../config/paths.js'
 import { createHttpHandler } from './http-handler.js'
 import { createWsUpgradeHandler } from './ws-handler.js'
 import { MethodRegistry } from './methods/registry.js'
 import { healthCheck } from './methods/health.js'
-import { chatSend } from './methods/chat.js'
+import { agentsList } from './methods/agents.js'
+import { sessionsCreate, sessionsList, sessionsGet } from './methods/sessions.js'
+import { chatSend, chatHistory, chatAbort } from './methods/chat.js'
 
 export interface GatewayServer {
   close(): Promise<void>
@@ -42,6 +46,8 @@ function createProviders(): Map<string, ModelProvider> {
 
 export async function startServer(config: Config, token: string): Promise<GatewayServer> {
   const providers = createProviders()
+  const sessionManager = new SessionManager(getSessionsDir())
+  const activeRuns = new Map<string, AbortController>()
 
   // Resolve workspace path
   const workspacePath = config.agents.workspacePath
@@ -50,13 +56,22 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
 
   const methods = new MethodRegistry()
   methods.register('health.check', healthCheck)
+  methods.register('agents.list', agentsList)
+  methods.register('sessions.create', sessionsCreate)
+  methods.register('sessions.list', sessionsList)
+  methods.register('sessions.get', sessionsGet)
   methods.register('chat.send', chatSend)
+  methods.register('chat.history', chatHistory)
+  methods.register('chat.abort', chatAbort)
 
   const httpHandler = createHttpHandler(config)
   const server = createServer(httpHandler)
 
   const wss = new WebSocketServer({ noServer: true })
-  const upgradeHandler = createWsUpgradeHandler(wss, methods, config, token, providers, workspacePath)
+  const upgradeHandler = createWsUpgradeHandler(
+    wss, methods, config, token,
+    providers, workspacePath, sessionManager, activeRuns,
+  )
 
   server.on('upgrade', upgradeHandler)
 
@@ -69,6 +84,12 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   return {
     close() {
       return new Promise<void>((resolve, reject) => {
+        // Abort all active runs
+        for (const [, controller] of activeRuns) {
+          controller.abort()
+        }
+        activeRuns.clear()
+
         wss.close(() => {
           server.close((err) => {
             if (err) reject(err)

@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { Config } from '../config/schema.js'
 import type { ModelProvider } from '../agents/providers/types.js'
+import type { SessionManager } from '../sessions/manager.js'
 import type { MethodContext } from './methods/types.js'
 import { MethodRegistry, RpcError } from './methods/registry.js'
 import { verifyToken } from './auth.js'
@@ -34,6 +35,8 @@ export function createWsUpgradeHandler(
   token: string,
   providers: Map<string, ModelProvider>,
   workspacePath: string,
+  sessionManager: SessionManager,
+  activeRuns: Map<string, AbortController>,
 ) {
   return (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     // Check Origin header — reject non-localhost origins
@@ -46,7 +49,7 @@ export function createWsUpgradeHandler(
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req)
-      handleConnection(ws, methods, config, token, providers, workspacePath)
+      handleConnection(ws, methods, config, token, providers, workspacePath, sessionManager, activeRuns)
     })
   }
 }
@@ -58,6 +61,8 @@ function handleConnection(
   token: string,
   providers: Map<string, ModelProvider>,
   workspacePath: string,
+  sessionManager: SessionManager,
+  activeRuns: Map<string, AbortController>,
 ): void {
   let authenticated = false
 
@@ -112,7 +117,7 @@ function handleConnection(
       return
     }
 
-    const ctx: MethodContext = { sendEvent, config, token, providers, workspacePath }
+    const ctx: MethodContext = { sendEvent, config, token, providers, workspacePath, sessionManager, activeRuns }
 
     try {
       const result = await methods.dispatch(method, params, ctx)

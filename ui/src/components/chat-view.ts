@@ -1,0 +1,230 @@
+import { LitElement, html, css } from 'lit'
+import { customElement, property, state, query } from 'lit/decorators.js'
+import type { WsClient } from '../ws-client.js'
+import type { MessageList, ChatMessage } from './message-list.js'
+import './message-list.js'
+import './input-bar.js'
+import './approval-dialog.js'
+
+interface ApprovalRequest {
+  approvalId: string
+  toolName: string
+  summary: string
+}
+
+interface HistoryMessage {
+  role: 'user' | 'assistant' | 'tool_result'
+  content: string
+  timestamp: number
+  runId?: string
+  toolName?: string
+}
+
+let msgIdCounter = 0
+function nextMsgId(): string {
+  return `msg-${++msgIdCounter}`
+}
+
+@customElement('jarvis-chat-view')
+export class ChatView extends LitElement {
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .progress-bar {
+      padding: 4px 20px;
+      font-size: 12px;
+      color: #888;
+      background: #0f0f0f;
+      border-bottom: 1px solid #1a1a1a;
+    }
+  `
+
+  @property({ attribute: false })
+  client!: WsClient
+
+  @property({ type: String })
+  sessionKey = ''
+
+  @state()
+  private streaming = false
+
+  @state()
+  private pendingApproval: ApprovalRequest | null = null
+
+  @state()
+  private progressMessage = ''
+
+  @query('jarvis-message-list')
+  private messageList!: MessageList
+
+  private unsubscribers: Array<() => void> = []
+  private currentRunId = ''
+
+  async connectedCallback() {
+    super.connectedCallback()
+    await this.loadHistory()
+    this.subscribeEvents()
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback()
+    for (const unsub of this.unsubscribers) unsub()
+    this.unsubscribers = []
+  }
+
+  private async loadHistory() {
+    try {
+      const res = await this.client.request<{ messages: HistoryMessage[] }>(
+        'chat.history',
+        { sessionKey: this.sessionKey },
+      )
+
+      const msgs: ChatMessage[] = res.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({
+          id: nextMsgId(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          runId: m.runId,
+        }))
+
+      // Wait for first render so messageList exists
+      await this.updateComplete
+      this.messageList?.setMessages(msgs)
+    } catch (err) {
+      console.error('Failed to load history:', err)
+    }
+  }
+
+  private subscribeEvents() {
+    this.unsubscribers.push(
+      this.client.on('chat.delta', (data) => {
+        const { runId, text } = data as { runId: string; text: string }
+        if (runId === this.currentRunId) {
+          this.messageList?.addDelta(runId, text)
+        }
+      }),
+    )
+
+    this.unsubscribers.push(
+      this.client.on('chat.final', (data) => {
+        const { runId } = data as { runId: string }
+        if (runId === this.currentRunId) {
+          this.messageList?.finishRun(runId)
+          this.streaming = false
+          this.progressMessage = ''
+          this.currentRunId = ''
+        }
+      }),
+    )
+
+    this.unsubscribers.push(
+      this.client.on('chat.error', (data) => {
+        const { runId, message } = data as { runId: string; message: string }
+        if (runId === this.currentRunId) {
+          this.messageList?.addDelta(runId, `\n\n**Error:** ${message}`)
+          this.messageList?.finishRun(runId)
+          this.streaming = false
+          this.progressMessage = ''
+          this.currentRunId = ''
+        }
+      }),
+    )
+
+    this.unsubscribers.push(
+      this.client.on('exec.approval_request', (data) => {
+        const req = data as ApprovalRequest
+        this.pendingApproval = req
+      }),
+    )
+
+    this.unsubscribers.push(
+      this.client.on('tool.progress', (data) => {
+        const { message } = data as { message: string }
+        this.progressMessage = message
+      }),
+    )
+  }
+
+  private async handleSend(e: CustomEvent<{ message: string }>) {
+    const { message } = e.detail
+    this.streaming = true
+
+    // Add user message optimistically
+    this.messageList?.addMessage({
+      id: nextMsgId(),
+      role: 'user',
+      content: message,
+    })
+
+    try {
+      const res = await this.client.request<{ runId: string }>(
+        'chat.send',
+        { sessionKey: this.sessionKey, message },
+      )
+      this.currentRunId = res.runId
+
+      // Add empty streaming assistant message
+      this.messageList?.addMessage({
+        id: nextMsgId(),
+        role: 'assistant',
+        content: '',
+        streaming: true,
+        runId: res.runId,
+      })
+    } catch (err) {
+      this.streaming = false
+      console.error('Failed to send:', err)
+    }
+  }
+
+  private async handleApprove(e: CustomEvent<{ approvalId: string }>) {
+    const { approvalId } = e.detail
+    this.pendingApproval = null
+    try {
+      await this.client.request('exec.approve', { approvalId })
+    } catch (err) {
+      console.error('Failed to approve:', err)
+    }
+  }
+
+  private async handleDeny(e: CustomEvent<{ approvalId: string }>) {
+    const { approvalId } = e.detail
+    this.pendingApproval = null
+    try {
+      await this.client.request('exec.deny', { approvalId })
+    } catch (err) {
+      console.error('Failed to deny:', err)
+    }
+  }
+
+  render() {
+    return html`
+      <jarvis-message-list></jarvis-message-list>
+      ${this.progressMessage
+        ? html`<div class="progress-bar">⏳ ${this.progressMessage}</div>`
+        : ''}
+      <jarvis-input-bar
+        .disabled=${this.streaming}
+        @send=${this.handleSend}
+      ></jarvis-input-bar>
+      <jarvis-approval-dialog
+        .visible=${this.pendingApproval !== null}
+        .approvalId=${this.pendingApproval?.approvalId ?? ''}
+        .toolName=${this.pendingApproval?.toolName ?? ''}
+        .summary=${this.pendingApproval?.summary ?? ''}
+        @approve=${this.handleApprove}
+        @deny=${this.handleDeny}
+      ></jarvis-approval-dialog>
+    `
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'jarvis-chat-view': ChatView
+  }
+}

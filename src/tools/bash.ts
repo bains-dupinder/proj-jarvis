@@ -96,6 +96,7 @@ export class BashTool implements Tool {
     }
 
     // Approved — execute the command
+    context.reportProgress(`Running: ${command}`)
     return this.spawn(command, cwd)
   }
 

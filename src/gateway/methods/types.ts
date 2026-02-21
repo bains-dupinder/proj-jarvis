@@ -4,6 +4,7 @@ import type { SessionManager } from '../../sessions/manager.js'
 import type { ToolRegistry } from '../../tools/registry.js'
 import type { ApprovalManager } from '../../tools/approval.js'
 import type { AuditLogger } from '../../security/audit.js'
+import type { BrowserSessionManager } from '../../tools/browser-session.js'
 
 export interface MethodContext {
   sendEvent(event: string, data: unknown): void
@@ -16,6 +17,7 @@ export interface MethodContext {
   toolRegistry: ToolRegistry
   approvalManager: ApprovalManager
   auditLogger: AuditLogger
+  browserSessionManager: BrowserSessionManager
 }
 
 export type MethodHandler = (params: unknown, ctx: MethodContext) => Promise<unknown>

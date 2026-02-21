@@ -6,6 +6,7 @@ import { parseModelRef } from '../../agents/model-ref.js'
 import { buildSystemPrompt, getAgentModelRef } from '../../agents/prompt-builder.js'
 import { runAgentTurn } from '../../agents/runner.js'
 import type { Message } from '../../agents/providers/types.js'
+import type { ModelProvider } from '../../agents/providers/types.js'
 import type { TranscriptEvent } from '../../sessions/transcript.js'
 import type { ToolContext } from '../../tools/types.js'
 import { filterSecrets } from '../../security/secrets-filter.js'
@@ -23,6 +24,45 @@ const HistoryParams = z.object({
 const AbortParams = z.object({
   runId: z.string().uuid(),
 })
+
+const FALLBACK_PROVIDER_ORDER = ['openai', 'anthropic'] as const
+const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-3-5-haiku-latest',
+}
+
+function resolveProviderAndModel(
+  providers: Map<string, ModelProvider>,
+  requestedProvider: string,
+  requestedModel: string,
+): { provider: ModelProvider; model: string } {
+  const directProvider = providers.get(requestedProvider)
+  if (directProvider) {
+    return {
+      provider: directProvider,
+      model: requestedModel,
+    }
+  }
+
+  const prioritizedFallback = FALLBACK_PROVIDER_ORDER.find((id) => providers.has(id))
+  const firstAvailable = providers.keys().next().value as string | undefined
+  const fallbackProviderId = prioritizedFallback ?? firstAvailable
+
+  if (!fallbackProviderId) {
+    throw new RpcError(
+      -32603,
+      `No AI providers configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env`,
+    )
+  }
+
+  const fallbackProvider = providers.get(fallbackProviderId)!
+  const fallbackModel = DEFAULT_MODEL_BY_PROVIDER[fallbackProviderId] ?? requestedModel
+
+  return {
+    provider: fallbackProvider,
+    model: fallbackModel,
+  }
+}
 
 /**
  * Convert transcript events to Message[] for the model.
@@ -75,14 +115,11 @@ export const chatSend: MethodHandler = async (params, ctx) => {
   }
 
   const modelRef = parseModelRef(modelRefStr)
-  const provider = ctx.providers.get(modelRef.provider)
-  if (!provider) {
-    throw new RpcError(
-      -32603,
-      `Provider "${modelRef.provider}" not available. ` +
-      `Set ${modelRef.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'} in .env`,
-    )
-  }
+  const resolved = resolveProviderAndModel(
+    ctx.providers,
+    modelRef.provider,
+    modelRef.model,
+  )
 
   const systemPrompt = await buildSystemPrompt(ctx.workspacePath)
   const runId = randomUUID()
@@ -105,8 +142,8 @@ export const chatSend: MethodHandler = async (params, ctx) => {
 
   // Fire and forget — streaming happens asynchronously via push events
   runAgentTurn({
-    provider,
-    model: modelRef.model,
+    provider: resolved.provider,
+    model: resolved.model,
     systemPrompt,
     messages,
     tools: ctx.toolRegistry.toDefinitions(),

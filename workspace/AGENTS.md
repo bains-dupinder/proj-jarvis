@@ -2,5 +2,5 @@
 
 ## assistant
 
-Model: anthropic/claude-opus-4-6
+Model: openai/gpt-5-mini
 Description: A helpful, accurate, and concise general-purpose assistant.

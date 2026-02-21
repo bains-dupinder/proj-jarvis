@@ -62,6 +62,7 @@ export class ChatView extends LitElement {
 
   private unsubscribers: Array<() => void> = []
   private currentRunId = ''
+  private hasStreamingAssistant = false
 
   async connectedCallback() {
     super.connectedCallback()
@@ -103,6 +104,10 @@ export class ChatView extends LitElement {
     this.unsubscribers.push(
       this.client.on('chat.delta', (data) => {
         const { runId, text } = data as { runId: string; text: string }
+        if (!this.currentRunId && this.streaming) {
+          this.currentRunId = runId
+          this.ensureStreamingAssistant(runId)
+        }
         if (runId === this.currentRunId) {
           this.messageList?.addDelta(runId, text)
         }
@@ -112,11 +117,16 @@ export class ChatView extends LitElement {
     this.unsubscribers.push(
       this.client.on('chat.final', (data) => {
         const { runId } = data as { runId: string }
+        if (!this.currentRunId && this.streaming) {
+          this.currentRunId = runId
+          this.ensureStreamingAssistant(runId)
+        }
         if (runId === this.currentRunId) {
           this.messageList?.finishRun(runId)
           this.streaming = false
           this.progressMessage = ''
           this.currentRunId = ''
+          this.hasStreamingAssistant = false
         }
       }),
     )
@@ -124,12 +134,17 @@ export class ChatView extends LitElement {
     this.unsubscribers.push(
       this.client.on('chat.error', (data) => {
         const { runId, message } = data as { runId: string; message: string }
+        if (!this.currentRunId && this.streaming) {
+          this.currentRunId = runId
+          this.ensureStreamingAssistant(runId)
+        }
         if (runId === this.currentRunId) {
           this.messageList?.addDelta(runId, `\n\n**Error:** ${message}`)
           this.messageList?.finishRun(runId)
           this.streaming = false
           this.progressMessage = ''
           this.currentRunId = ''
+          this.hasStreamingAssistant = false
         }
       }),
     )
@@ -152,6 +167,8 @@ export class ChatView extends LitElement {
   private async handleSend(e: CustomEvent<{ message: string }>) {
     const { message } = e.detail
     this.streaming = true
+    this.currentRunId = ''
+    this.hasStreamingAssistant = false
 
     // Add user message optimistically
     this.messageList?.addMessage({
@@ -165,20 +182,35 @@ export class ChatView extends LitElement {
         'chat.send',
         { sessionKey: this.sessionKey, message },
       )
-      this.currentRunId = res.runId
-
-      // Add empty streaming assistant message
+      if (!this.currentRunId) {
+        this.currentRunId = res.runId
+      }
+      this.ensureStreamingAssistant(this.currentRunId)
+    } catch (err) {
+      this.streaming = false
+      this.progressMessage = ''
+      this.currentRunId = ''
+      this.hasStreamingAssistant = false
+      const message = err instanceof Error ? err.message : 'Failed to send message'
       this.messageList?.addMessage({
         id: nextMsgId(),
         role: 'assistant',
-        content: '',
-        streaming: true,
-        runId: res.runId,
+        content: `**Error:** ${message}`,
       })
-    } catch (err) {
-      this.streaming = false
       console.error('Failed to send:', err)
     }
+  }
+
+  private ensureStreamingAssistant(runId: string) {
+    if (this.hasStreamingAssistant) return
+    this.messageList?.addMessage({
+      id: nextMsgId(),
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      runId,
+    })
+    this.hasStreamingAssistant = true
   }
 
   private async handleApprove(e: CustomEvent<{ approvalId: string }>) {

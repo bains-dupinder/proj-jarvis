@@ -5,6 +5,8 @@ import type { ToolRegistry } from '../../tools/registry.js'
 import type { ApprovalManager } from '../../tools/approval.js'
 import type { AuditLogger } from '../../security/audit.js'
 import type { BrowserSessionManager } from '../../tools/browser-session.js'
+import type { MemoryDb } from '../../memory/db.js'
+import type { EmbeddingProvider } from '../../memory/embeddings.js'
 
 export interface MethodContext {
   sendEvent(event: string, data: unknown): void
@@ -18,6 +20,8 @@ export interface MethodContext {
   approvalManager: ApprovalManager
   auditLogger: AuditLogger
   browserSessionManager: BrowserSessionManager
+  memoryDb: MemoryDb | null
+  embedder: EmbeddingProvider | null
 }
 
 export type MethodHandler = (params: unknown, ctx: MethodContext) => Promise<unknown>

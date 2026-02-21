@@ -14,6 +14,7 @@
     "dotenv": "^16.4.7",
     "openai": "^6.22.0",
     "playwright": "^1.58.2",
+    "sqlite-vec": "0.1.7-alpha.2",
     "ws": "^8.18.0",
     "zod": "^3.24.2"
   },
@@ -22,5 +23,6 @@
     "@types/ws": "^8.5.14",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
-  }
+  },
+  "packageManager": "pnpm@10.30.1+sha512.3590e550d5384caa39bd5c7c739f72270234b2f6059e13018f975c313b1eb9fefcc09714048765d4d9efe961382c312e624572c0420762bdc5d5940cdf9be73a"
 }

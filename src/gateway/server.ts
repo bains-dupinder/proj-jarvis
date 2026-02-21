@@ -1,18 +1,22 @@
 import { createServer } from 'node:http'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import type { Config } from '../config/schema.js'
 import type { ModelProvider } from '../agents/providers/types.js'
 import { AnthropicProvider } from '../agents/providers/anthropic.js'
 import { OpenAIProvider } from '../agents/providers/openai.js'
 import { SessionManager } from '../sessions/manager.js'
-import { getSessionsDir, getAuditLogPath } from '../config/paths.js'
+import { getSessionsDir, getAuditLogPath, getDataDir } from '../config/paths.js'
 import { ToolRegistry } from '../tools/registry.js'
 import { ApprovalManager } from '../tools/approval.js'
 import { BashTool } from '../tools/bash.js'
 import { BrowserTool } from '../tools/browser.js'
 import { BrowserSessionManager } from '../tools/browser-session.js'
 import { AuditLogger } from '../security/audit.js'
+import { openMemoryDb, type MemoryDb } from '../memory/db.js'
+import { OpenAIEmbeddingProvider, type EmbeddingProvider } from '../memory/embeddings.js'
+import { IndexManager } from '../memory/indexer.js'
+import { indexSessionTranscripts } from '../memory/session-files.js'
 import { createHttpHandler } from './http-handler.js'
 import { createWsUpgradeHandler } from './ws-handler.js'
 import { MethodRegistry } from './methods/registry.js'
@@ -21,6 +25,7 @@ import { agentsList } from './methods/agents.js'
 import { sessionsCreate, sessionsList, sessionsGet } from './methods/sessions.js'
 import { chatSend, chatHistory, chatAbort } from './methods/chat.js'
 import { execApprove, execDeny } from './methods/exec.js'
+import { memorySearch } from './methods/memory.js'
 
 export interface GatewayServer {
   close(): Promise<void>
@@ -67,6 +72,35 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   toolRegistry.register(new BrowserTool(approvalManager, browserSessionManager, config))
   console.log(`  ✓ ${toolRegistry.all().length} tool(s) registered: ${toolRegistry.all().map(t => t.name).join(', ')}`)
 
+  // Memory system
+  let memoryDb: MemoryDb | null = null
+  let embedder: EmbeddingProvider | null = null
+
+  try {
+    const dbPath = join(getDataDir(), 'memory.db')
+    memoryDb = openMemoryDb(dbPath)
+
+    const openaiKey = process.env['OPENAI_API_KEY']
+    if (openaiKey) {
+      embedder = new OpenAIEmbeddingProvider(openaiKey)
+      console.log('  ✓ Memory system ready (keyword + vector search)')
+    } else {
+      console.log('  ✓ Memory system ready (keyword search only — set OPENAI_API_KEY for vectors)')
+    }
+
+    // Index existing session transcripts in the background
+    const indexManager = new IndexManager(memoryDb, embedder)
+    indexSessionTranscripts(indexManager, getSessionsDir())
+      .then(({ indexed, skipped }) => {
+        if (indexed > 0 || skipped > 0) {
+          console.log(`  ✓ Memory indexed ${indexed} transcript(s), ${skipped} unchanged`)
+        }
+      })
+      .catch((err) => console.warn('[memory] Background indexing failed:', err))
+  } catch (err) {
+    console.warn('  ⚠ Memory system unavailable:', (err as Error).message)
+  }
+
   // Resolve workspace path
   const workspacePath = config.agents.workspacePath
     ? resolve(config.agents.workspacePath)
@@ -83,6 +117,7 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   methods.register('chat.abort', chatAbort)
   methods.register('exec.approve', execApprove)
   methods.register('exec.deny', execDeny)
+  methods.register('memory.search', memorySearch)
 
   const httpHandler = createHttpHandler(config)
   const server = createServer(httpHandler)
@@ -92,6 +127,7 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
     wss, methods, config, token,
     providers, workspacePath, sessionManager, activeRuns,
     toolRegistry, approvalManager, auditLogger, browserSessionManager,
+    memoryDb, embedder,
   })
 
   server.on('upgrade', upgradeHandler)
@@ -112,6 +148,11 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
 
       // Close browser sessions
       await browserSessionManager.closeAll()
+
+      // Close memory database
+      if (memoryDb) {
+        try { memoryDb.close() } catch { /* best effort */ }
+      }
 
       return new Promise<void>((resolve, reject) => {
         wss.close(() => {

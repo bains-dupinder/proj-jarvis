@@ -99,6 +99,7 @@ export const chatSend: MethodHandler = async (params, ctx) => {
     sessionKey,
     runId,
     sendEvent: ctx.sendEvent,
+    reportProgress: (message) => ctx.sendEvent('tool.progress', { runId, message }),
     config: ctx.config,
   }
 
@@ -167,13 +168,23 @@ export const chatSend: MethodHandler = async (params, ctx) => {
           },
         }).catch(() => {})
 
-        // Persist tool result to transcript
+        // Push attachments (e.g. screenshots) to the client
+        if (result.attachments && result.attachments.length > 0) {
+          ctx.sendEvent('tool.attachments', {
+            runId,
+            tool: name,
+            attachments: result.attachments,
+          })
+        }
+
+        // Persist tool result to transcript (with attachment metadata, not data)
         session.appendEvent({
           role: 'tool_result',
           content: filteredOutput,
           timestamp: Date.now(),
           runId,
           toolName: name,
+          attachmentCount: result.attachments?.length,
         }).catch(() => {})
 
         return filteredOutput

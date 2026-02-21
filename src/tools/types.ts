@@ -2,10 +2,18 @@ import type { z } from 'zod'
 import type { Config } from '../config/schema.js'
 import type { ToolDefinition } from '../agents/providers/types.js'
 
+export interface ToolAttachment {
+  type: 'image' | 'file'
+  mimeType: string      // e.g. 'image/png'
+  data: string           // base64-encoded
+  name?: string
+}
+
 export interface ToolContext {
   sessionKey: string
   runId: string
   sendEvent: (event: string, data: unknown) => void
+  reportProgress: (message: string) => void
   config: Config
 }
 
@@ -22,6 +30,7 @@ export interface ToolResult {
   output: string
   exitCode?: number
   truncated?: boolean
+  attachments?: ToolAttachment[]
 }
 
 export interface ApprovalRequest {

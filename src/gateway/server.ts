@@ -10,6 +10,8 @@ import { getSessionsDir, getAuditLogPath } from '../config/paths.js'
 import { ToolRegistry } from '../tools/registry.js'
 import { ApprovalManager } from '../tools/approval.js'
 import { BashTool } from '../tools/bash.js'
+import { BrowserTool } from '../tools/browser.js'
+import { BrowserSessionManager } from '../tools/browser-session.js'
 import { AuditLogger } from '../security/audit.js'
 import { createHttpHandler } from './http-handler.js'
 import { createWsUpgradeHandler } from './ws-handler.js'
@@ -58,9 +60,11 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   const approvalManager = new ApprovalManager()
   const toolRegistry = new ToolRegistry()
   const auditLogger = new AuditLogger(getAuditLogPath(), config.security.auditLog)
+  const browserSessionManager = new BrowserSessionManager()
 
   // Register tools
   toolRegistry.register(new BashTool(approvalManager, config))
+  toolRegistry.register(new BrowserTool(approvalManager, browserSessionManager, config))
   console.log(`  ✓ ${toolRegistry.all().length} tool(s) registered: ${toolRegistry.all().map(t => t.name).join(', ')}`)
 
   // Resolve workspace path
@@ -87,7 +91,7 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   const upgradeHandler = createWsUpgradeHandler({
     wss, methods, config, token,
     providers, workspacePath, sessionManager, activeRuns,
-    toolRegistry, approvalManager, auditLogger,
+    toolRegistry, approvalManager, auditLogger, browserSessionManager,
   })
 
   server.on('upgrade', upgradeHandler)
@@ -99,14 +103,17 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   console.log(`Listening on ws://${config.gateway.host}:${config.gateway.port}`)
 
   return {
-    close() {
-      return new Promise<void>((resolve, reject) => {
-        // Abort all active runs
-        for (const [, controller] of activeRuns) {
-          controller.abort()
-        }
-        activeRuns.clear()
+    async close() {
+      // Abort all active runs
+      for (const [, controller] of activeRuns) {
+        controller.abort()
+      }
+      activeRuns.clear()
 
+      // Close browser sessions
+      await browserSessionManager.closeAll()
+
+      return new Promise<void>((resolve, reject) => {
         wss.close(() => {
           server.close((err) => {
             if (err) reject(err)

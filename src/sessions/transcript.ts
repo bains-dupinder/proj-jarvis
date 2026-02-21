@@ -6,6 +6,7 @@ export interface TranscriptEvent {
   timestamp: number // Unix ms
   runId?: string
   toolName?: string
+  attachmentCount?: number
 }
 
 /**

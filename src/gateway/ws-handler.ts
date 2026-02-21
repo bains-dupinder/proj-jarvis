@@ -7,6 +7,7 @@ import type { SessionManager } from '../sessions/manager.js'
 import type { ToolRegistry } from '../tools/registry.js'
 import type { ApprovalManager } from '../tools/approval.js'
 import type { AuditLogger } from '../security/audit.js'
+import type { BrowserSessionManager } from '../tools/browser-session.js'
 import type { MethodContext } from './methods/types.js'
 import { MethodRegistry, RpcError } from './methods/registry.js'
 import { verifyToken } from './auth.js'
@@ -43,6 +44,7 @@ export interface WsHandlerDeps {
   toolRegistry: ToolRegistry
   approvalManager: ApprovalManager
   auditLogger: AuditLogger
+  browserSessionManager: BrowserSessionManager
 }
 
 export function createWsUpgradeHandler(deps: WsHandlerDeps) {
@@ -127,6 +129,7 @@ function handleConnection(ws: WebSocket, deps: WsHandlerDeps): void {
       toolRegistry: deps.toolRegistry,
       approvalManager: deps.approvalManager,
       auditLogger: deps.auditLogger,
+      browserSessionManager: deps.browserSessionManager,
     }
 
     try {

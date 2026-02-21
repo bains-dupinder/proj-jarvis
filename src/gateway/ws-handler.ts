@@ -8,6 +8,8 @@ import type { ToolRegistry } from '../tools/registry.js'
 import type { ApprovalManager } from '../tools/approval.js'
 import type { AuditLogger } from '../security/audit.js'
 import type { BrowserSessionManager } from '../tools/browser-session.js'
+import type { MemoryDb } from '../memory/db.js'
+import type { EmbeddingProvider } from '../memory/embeddings.js'
 import type { MethodContext } from './methods/types.js'
 import { MethodRegistry, RpcError } from './methods/registry.js'
 import { verifyToken } from './auth.js'
@@ -45,6 +47,8 @@ export interface WsHandlerDeps {
   approvalManager: ApprovalManager
   auditLogger: AuditLogger
   browserSessionManager: BrowserSessionManager
+  memoryDb: MemoryDb | null
+  embedder: EmbeddingProvider | null
 }
 
 export function createWsUpgradeHandler(deps: WsHandlerDeps) {
@@ -130,6 +134,8 @@ function handleConnection(ws: WebSocket, deps: WsHandlerDeps): void {
       approvalManager: deps.approvalManager,
       auditLogger: deps.auditLogger,
       browserSessionManager: deps.browserSessionManager,
+      memoryDb: deps.memoryDb,
+      embedder: deps.embedder,
     }
 
     try {

@@ -1,6 +1,6 @@
 # Proj Jarvis — Design Document
 
-> **Status**: POC design, pre-implementation.
+> **Status**: Implemented. All phases complete.
 > This document is the single source of truth for architecture and interfaces.
 > Phase instruction files under `docs/phases/` reference back here.
 
@@ -15,7 +15,7 @@ Build Jarvis from scratch, inspired by [OpenClaw](https://github.com/openclaw/op
 ## Design Principles
 
 1. **Local-first** — gateway binds to `127.0.0.1` only; no cloud infra required
-2. **Approval-gated tools** — every shell command requires explicit user approval before execution
+2. **Approval-gated tools** — bash and browser commands require explicit user approval before execution
 3. **Provider-agnostic agents** — Anthropic and OpenAI share a common streaming interface
 4. **Markdown-defined agents** — personality/behaviour lives in editable `.md` files, not code
 5. **Minimal dependencies** — prefer Node.js built-ins; add packages only when genuinely needed
@@ -41,28 +41,34 @@ Build Jarvis from scratch, inspired by [OpenClaw](https://github.com/openclaw/op
 │  Methods: chat.send, chat.history, chat.abort           │
 │           agents.list, sessions.list/create/get         │
 │           exec.approve, exec.deny, health.check         │
+│           memory.search                                 │
+│           scheduler.list, scheduler.get, scheduler.runs │
 │                                                         │
 │  Events pushed to client:                               │
 │    chat.delta  — streaming text chunk                   │
 │    chat.final  — generation complete                    │
 │    chat.error  — generation failed                      │
 │    exec.approval_request — tool needs user approval     │
-└────┬───────────────┬───────────────────────────────────┘
-     │               │
-┌────▼────┐    ┌─────▼──────────────────────────────────┐
-│ Memory  │    │  Agent Runner                           │
-│ SQLite  │    │  Reads AGENTS.md / SOUL.md / TOOLS.md  │
-│ +vec    │    │  Calls provider (Anthropic or OpenAI)  │
-│ BM25    │    │  Streams events back to gateway        │
-│ vector  │    │  On tool call → approval workflow      │
-└─────────┘    └────────────┬───────────────────────────┘
-                            │ (after approval)
-                    ┌───────▼──────────┐
-                    │  Process Exec    │
-                    │  child_process   │
-                    │  + output buffer │
-                    │  + timeout       │
-                    └──────────────────┘
+│    tool.progress — mid-execution status update          │
+│    tool.attachments — binary outputs (screenshots)      │
+│    scheduler.run_completed — scheduled job finished     │
+└────┬──────────┬──────────────┬───────────────────────────┘
+     │          │              │
+┌────▼────┐ ┌──▼───────┐ ┌───▼──────────────────────────┐
+│ Memory  │ │Scheduler │ │  Agent Runner                 │
+│ SQLite  │ │ Cron     │ │  Reads AGENTS.md / SOUL.md   │
+│ +vec    │ │ engine   │ │  Calls provider (Anthropic   │
+│ keyword │ │ SQLite   │ │    or OpenAI)                │
+│ vector  │ │ jobs     │ │  Streams events to gateway   │
+└─────────┘ └──────────┘ │  On tool call → approval     │
+                          └────────────┬───────────────────┘
+                                       │ (after approval)
+                           ┌───────────▼─────────────┐
+                           │  Tools                   │
+                           │  bash → child_process    │
+                           │  browser → Playwright    │
+                           │  schedule → CRUD engine  │
+                           └─────────────────────────┘
 ```
 
 ---
@@ -71,15 +77,17 @@ Build Jarvis from scratch, inspired by [OpenClaw](https://github.com/openclaw/op
 
 ### Included
 - Gateway server (WebSocket + HTTP) on localhost
-- JSON-RPC protocol with 10 methods
-- Server-push events for streaming
+- JSON-RPC protocol with 14 methods
+- Server-push events for streaming (7 event types)
 - Shared-token authentication (timing-safe)
 - Two AI providers: Anthropic Claude, OpenAI GPT (common streaming interface)
 - Session management with JSONL transcripts
-- Tool execution: bash tool + browser tool, both with approval workflow
-- Persistent memory: SQLite + sqlite-vec, hybrid BM25 + vector search
+- Three tools: bash, browser, schedule — all with extensible Tool interface
+- Approval workflow for bash and browser tools, auto-approve support for scheduled execution
+- Persistent memory: SQLite + sqlite-vec, hybrid keyword + vector search
+- Scheduler: cron-based recurring jobs with persistent storage, auto-approved agent execution
 - Web UI: Lit web components, WebSocket client, markdown rendering
-- Audit logging of all tool executions and auth events
+- Audit logging of all tool executions, auth events, and scheduled runs
 - Secrets filtering on all outputs/logs
 
 ### Excluded from POC
@@ -111,6 +119,7 @@ proj-jarvis/
 │       ├── phase-2-agents.md      # AI providers + agent runner
 │       ├── phase-3-sessions.md    # Sessions + chat RPC methods
 │       ├── phase-4-tools.md       # Bash tool + approval workflow
+│       ├── phase-4b-browser-tool.md # Browser tool (Playwright)
 │       ├── phase-5-memory.md      # SQLite + vector search
 │       └── phase-6-ui.md          # Lit web UI
 │
@@ -134,10 +143,12 @@ proj-jarvis/
 │   │       ├── agents.ts          # agents.list
 │   │       ├── sessions.ts        # sessions.create/list/get
 │   │       ├── chat.ts            # chat.send/history/abort
-│   │       └── exec.ts            # exec.approve/deny
+│   │       ├── exec.ts            # exec.approve/deny
+│   │       ├── memory.ts          # memory.search
+│   │       └── scheduler.ts       # scheduler.list/get/runs
 │   │
 │   ├── agents/
-│   │   ├── runner.ts              # AgentRunner — one chat turn
+│   │   ├── runner.ts              # runAgentTurn — one chat turn with tool loop
 │   │   ├── prompt-builder.ts      # Build system prompt from workspace
 │   │   ├── model-ref.ts           # parseModelRef("provider/model")
 │   │   └── providers/
@@ -146,17 +157,24 @@ proj-jarvis/
 │   │       └── openai.ts          # OpenAI SDK  → AsyncIterable<ChatEvent>
 │   │
 │   ├── tools/
-│   │   ├── types.ts               # Tool, ToolResult, ApprovalRequest, ToolProgress
+│   │   ├── types.ts               # Tool, ToolResult, ToolContext (incl. autoApprove)
 │   │   ├── approval.ts            # Pending approval map + Promise API
 │   │   ├── registry.ts            # ToolRegistry: register + lookup
-│   │   ├── bash.ts                # BashTool: spawn, buffer, timeout
-│   │   └── browser.ts             # BrowserTool: Playwright, screenshot, navigate, click
+│   │   ├── bash.ts                # BashTool: spawn, buffer, timeout, approval guard
+│   │   ├── browser.ts             # BrowserTool: Playwright actions, approval guard
+│   │   ├── browser-session.ts     # BrowserSessionManager: lazy Chromium, contexts
+│   │   └── schedule.ts            # ScheduleTool: CRUD via SchedulerEngine
+│   │
+│   ├── scheduler/
+│   │   ├── cron.ts                # 5-field cron parser, getNextRun, describeCron
+│   │   ├── schema.ts              # SQL: scheduled_jobs, job_runs tables
+│   │   └── engine.ts              # SchedulerEngine: timers, CRUD, job execution
 │   │
 │   ├── memory/
 │   │   ├── db.ts                  # Open SQLite + load sqlite-vec
-│   │   ├── schema.ts              # CREATE TABLE SQL strings
+│   │   ├── schema.ts              # CREATE TABLE SQL strings (memory + scheduler)
 │   │   ├── embeddings.ts          # EmbeddingProvider + OpenAI impl
-│   │   ├── search.ts              # hybridSearch: BM25 + vector + RRF
+│   │   ├── search.ts              # hybridSearch: keyword + vector + RRF
 │   │   ├── indexer.ts             # IndexManager: sync, chunk, upsert
 │   │   └── session-files.ts       # Index JSONL transcripts
 │   │
@@ -168,6 +186,17 @@ proj-jarvis/
 │   └── security/
 │       ├── audit.ts               # appendAuditEvent → audit.jsonl
 │       └── secrets-filter.ts      # filterSecrets(text) → redacted
+│
+├── tests/                         # 101 tests across 9 test files
+│   ├── approval.test.ts
+│   ├── browser-session.test.ts
+│   ├── browser-tool.test.ts
+│   ├── cron.test.ts
+│   ├── memory.test.ts
+│   ├── schedule-tool.test.ts
+│   ├── scheduler-engine.test.ts
+│   ├── secrets-filter.test.ts
+│   └── tool-registry.test.ts
 │
 ├── ui/
 │   ├── package.json               # lit, vite, marked, dompurify
@@ -186,15 +215,10 @@ proj-jarvis/
 │           ├── session-list.ts    # <jarvis-session-list>
 │           └── markdown-renderer.ts # Marked + DOMPurify
 │
-├── workspace/                     # User-editable agent definitions
-│   ├── AGENTS.md
-│   ├── SOUL.md
-│   └── TOOLS.md
-│
-└── test/
-    ├── unit/
-    ├── integration/
-    └── helpers/
+└── workspace/                     # User-editable agent definitions
+    ├── AGENTS.md
+    ├── SOUL.md
+    └── TOOLS.md
 ```
 
 ---
@@ -236,8 +260,12 @@ Server responds `{ "type": "auth", "ok": true }` or closes the connection.
 | `chat.send` | `{ sessionKey, message }` | `{ runId }` + push events | Starts stream |
 | `chat.history` | `{ sessionKey, limit? }` | `{ messages }` | |
 | `chat.abort` | `{ runId }` | `{ ok }` | |
-| `exec.approve` | `{ approvalId }` | `{ ok }` | Unblocks bash tool |
+| `exec.approve` | `{ approvalId }` | `{ ok }` | Unblocks tool execution |
 | `exec.deny` | `{ approvalId, reason? }` | `{ ok }` | |
+| `memory.search` | `{ query, k? }` | `{ results }` | Hybrid keyword + vector search |
+| `scheduler.list` | `{ enabledOnly? }` | `{ jobs }` | List all scheduled jobs |
+| `scheduler.get` | `{ id }` | `{ job }` | Get job details |
+| `scheduler.runs` | `{ jobId, limit? }` | `{ runs }` | Get job execution history |
 
 ---
 
@@ -248,8 +276,10 @@ Server responds `{ "type": "auth", "ok": true }` or closes the connection.
 | `chat.delta` | `{ runId, text }` | Each text chunk from model |
 | `chat.final` | `{ runId, usage: { inputTokens, outputTokens } }` | Generation complete |
 | `chat.error` | `{ runId, message }` | Generation failed |
-| `exec.approval_request` | `{ approvalId, toolName, summary, details }` | Any tool requiring approval |
-| `tool.progress` | `{ runId, tool, message }` | Mid-execution status update |
+| `exec.approval_request` | `{ approvalId, toolName, summary, details }` | Tool requiring approval (bash, browser) |
+| `tool.progress` | `{ runId, message }` | Mid-execution status update |
+| `tool.attachments` | `{ runId, tool, attachments }` | Binary outputs (e.g. screenshots) |
+| `scheduler.run_completed` | `{ jobId, runId, status, summary }` | Scheduled job finished executing |
 
 ---
 
@@ -297,10 +327,11 @@ interface ToolContext {
   sendEvent: (event: string, data: unknown) => void  // push to WS client
   reportProgress: (message: string) => void          // stream status updates
   config: Config
+  autoApprove?: boolean                               // skip approval (scheduled execution)
 }
 
 interface Tool {
-  name: string                      // unique identifier, e.g. "bash", "browser"
+  name: string                      // unique identifier, e.g. "bash", "browser", "schedule"
   description: string               // shown to AI model in system prompt
   inputSchema: z.ZodSchema          // validated before execute() is called
   requiresApproval: boolean         // if true, user must approve before execute()
@@ -329,18 +360,23 @@ interface ToolAttachment {
 
 No changes needed to the gateway, agent runner, approval flow, or RPC methods.
 
-#### Built-in tools (POC)
+#### Built-in tools
 
 | Tool | File | Approval | Description |
 |---|---|---|---|
-| `bash` | `tools/bash.ts` | ✅ required | Run shell commands, read files, run scripts |
-| `browser` | `tools/browser.ts` | ✅ required | Control a browser via Playwright |
+| `bash` | `tools/bash.ts` | Required | Run shell commands, read files, run scripts |
+| `browser` | `tools/browser.ts` | Required | Control a headless Chromium browser via Playwright: navigate, click, type, screenshot, extract text. Blocks dangerous URL schemes, refuses password fields. |
+| `schedule` | `tools/schedule.ts` | Not required | Create, list, update, and delete cron-based scheduled jobs. The AI calls this tool when the user asks to schedule recurring tasks. |
+
+#### Auto-approve mechanism
+
+The `ToolContext.autoApprove` flag allows tools to skip the interactive approval workflow. This is used by the scheduler engine when executing jobs unattended — the bash and browser tools check this flag and skip the approval request/await cycle when it is set to `true`.
 
 #### Progress streaming
 
 `context.reportProgress(message)` sends a `tool.progress` push event to the UI:
 ```json
-{ "event": "tool.progress", "data": { "runId": "...", "tool": "browser", "message": "Navigating to https://example.com..." } }
+{ "event": "tool.progress", "data": { "runId": "...", "message": "Navigating to https://example.com..." } }
 ```
 The UI renders these as inline status lines below the in-progress assistant message. This is especially important for the browser tool where individual actions can take seconds each.
 
@@ -351,31 +387,129 @@ The UI renders these as inline status lines below the in-progress assistant mess
 ```
 AgentRunner receives tool_call event from model
   │
-  ├─ Generate approvalId via crypto.randomUUID()
-  │
-  ├─ Push exec.approval_request event to WS client
-  │     { approvalId, toolName, summary, details }
-  │     e.g. bash: { toolName:"bash", summary:"echo hello", details:{command,workingDir} }
-  │          browser: { toolName:"browser", summary:"Navigate to google.com", details:{actions} }
-  │
-  ├─ Register pending Promise in approval.ts map
-  │     pendingApprovals.set(approvalId, { resolve, reject })
-  │
-  ├─ UI shows <jarvis-approval-dialog> — command + working dir visible
-  │
-  ├─ User clicks Approve → client sends exec.approve { approvalId }
-  │        OR Deny   → client sends exec.deny   { approvalId, reason? }
-  │
-  ├─ Gateway calls resolveApproval() or rejectApproval()
-  │
-  ├─ On approve: BashTool spawns child_process.spawn('bash', ['-c', cmd])
-  │              Buffers stdout+stderr, max 100 KB, timeout 120 s
-  │   On deny:   BashTool returns { output: "Denied: <reason>" }
+  ├─ If tool.requiresApproval AND NOT autoApprove:
+  │   │
+  │   ├─ Generate approvalId via crypto.randomUUID()
+  │   │
+  │   ├─ Push exec.approval_request event to WS client
+  │   │     { approvalId, toolName, summary, details }
+  │   │     e.g. bash: { toolName:"bash", summary:"echo hello", details:{command,workingDir} }
+  │   │          browser: { toolName:"browser", summary:"Navigate to google.com", details:{actions} }
+  │   │
+  │   ├─ Register pending Promise in approval.ts map
+  │   │     pendingApprovals.set(approvalId, { resolve, reject })
+  │   │
+  │   ├─ UI shows <jarvis-approval-dialog> — command + working dir visible
+  │   │
+  │   ├─ User clicks Approve → client sends exec.approve { approvalId }
+  │   │        OR Deny   → client sends exec.deny   { approvalId, reason? }
+  │   │
+  │   ├─ Gateway calls resolveApproval() or rejectApproval()
+  │   │
+  │   ├─ On approve: tool proceeds to execute
+  │   │   On deny:   tool returns { output: "Denied: <reason>" }
+  │   │
+  ├─ If NOT requiresApproval OR autoApprove: execute immediately
   │
   ├─ Tool result appended to transcript + audit log
   │
   └─ Result returned to model as next conversation turn
 ```
+
+---
+
+## Browser Tool
+
+The browser tool provides headless Chromium control via Playwright. It supports five action types that can be chained in a single tool call (up to 20 actions):
+
+| Action | Params | Description |
+|---|---|---|
+| `navigate` | `{ url }` | Navigate to a URL (http/https only) |
+| `click` | `{ selector }` | Click an element by CSS selector |
+| `type` | `{ selector, text }` | Fill a form field (refuses password fields) |
+| `screenshot` | — | Capture a PNG screenshot (returned as base64 attachment) |
+| `extract` | `{ selector? }` | Extract text content (full page or specific element) |
+
+Security measures:
+- Blocks `file://`, `chrome://`, `chrome-extension://`, `about:`, `javascript:` URL schemes
+- Refuses to type into password fields
+- Each tool call gets an isolated BrowserContext (separate cookies/storage)
+- Sessions can be reused via `sessionId` for multi-step workflows
+
+---
+
+## Scheduler Architecture
+
+```
+┌──────────────────────────────────────────────────┐
+│  SchedulerEngine (in-process, gateway server)    │
+│                                                  │
+│  On start():                                     │
+│    Load enabled jobs from SQLite                 │
+│    For each job → compute next run → setTimeout  │
+│                                                  │
+│  On timer fire (executeJob):                     │
+│    1. Create new session                         │
+│    2. Resolve provider/model from AGENTS.md      │
+│    3. runAgentTurn() with job.prompt              │
+│       └─ ToolContext.autoApprove = true           │
+│    4. Store result in job_runs table              │
+│    5. Update scheduled_jobs.last_run_*            │
+│    6. Broadcast scheduler.run_completed event     │
+│    7. Reschedule for next cron occurrence         │
+│                                                  │
+│  CRUD: create / list / get / update / delete     │
+│    Called by ScheduleTool (AI) or RPC methods     │
+│                                                  │
+│  NOTE: All timers run in the gateway process.    │
+│  Jobs do NOT execute if the gateway is stopped.  │
+└──────────────────────────────────────────────────┘
+
+SQLite tables (in memory.db):
+
+  scheduled_jobs:
+    id              TEXT PRIMARY KEY
+    name            TEXT NOT NULL
+    cron_expression TEXT NOT NULL        -- 5-field cron: min hr dom mon dow
+    prompt          TEXT NOT NULL        -- user message sent to agent
+    agent_id        TEXT DEFAULT 'assistant'
+    enabled         INTEGER DEFAULT 1
+    created_at      INTEGER
+    updated_at      INTEGER
+    last_run_at     INTEGER
+    last_run_status TEXT                 -- 'success' | 'error'
+    last_run_summary TEXT
+
+  job_runs:
+    id          TEXT PRIMARY KEY
+    job_id      TEXT REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+    started_at  INTEGER
+    finished_at INTEGER
+    status      TEXT                     -- 'running' | 'success' | 'error'
+    summary     TEXT
+    session_key TEXT
+    error       TEXT
+```
+
+### Cron expression format
+
+Standard 5-field: `minute hour day-of-month month day-of-week`
+
+| Example | Meaning |
+|---|---|
+| `0 8 * * *` | Daily at 8:00 AM |
+| `0 9 * * 1-5` | Weekdays at 9:00 AM |
+| `*/30 * * * *` | Every 30 minutes |
+| `0 0 1 * *` | First of every month at midnight |
+| `0 8,12,18 * * *` | At 8am, 12pm, and 6pm daily |
+
+### Timer management
+
+- Uses `setTimeout` per job (not `setInterval` or system cron)
+- All timers run in the gateway Node.js process; jobs do not execute if the gateway is not running
+- Handles Node.js 32-bit `setTimeout` limit (~24.8 days) with relay timers
+- Prevents overlapping executions of the same job via `activeExecutions` set
+- On server restart: loads all enabled jobs from DB, computes next run, schedules timers
 
 ---
 
@@ -387,20 +521,20 @@ SQLite DB: ~/.proj-jarvis/memory.db
 Tables:
   files           (path TEXT PK, hash TEXT, indexed_at INTEGER)
   chunks          (id INTEGER PK, file_path TEXT, content TEXT, embedding BLOB)
-  chunks_fts      (content) ← FTS5 virtual table for BM25
   embedding_cache (hash TEXT PK, embedding BLOB, created_at INTEGER)
 
 Hybrid search algorithm:
-  1. BM25 keyword search on chunks_fts  → scored list A
+  1. Keyword search using LIKE with stop word filtering → scored list A
   2. Vector cosine similarity on chunks.embedding (sqlite-vec) → scored list B
   3. Reciprocal Rank Fusion: score = 1/(k+rankA) + 1/(k+rankB), k=60
   4. Return top-k merged results with source file paths
 
 Indexing:
   - Triggered on server start for any new/changed session transcript files
-  - Text chunked at ~500 tokens with 50-token overlap
+  - Text chunked at ~400 words with 50-word overlap
   - Embeddings: OpenAI text-embedding-3-small (1536 dims)
   - Embedding cache keyed on SHA-256(chunk text) — avoids re-calling API
+  - Falls back to keyword-only search if OPENAI_API_KEY is not set
 ```
 
 ---
@@ -443,7 +577,7 @@ Environment overrides (all optional):
 |---|---|
 | `PROJ_JARVIS_TOKEN` | auth token (required if auth enabled) |
 | `ANTHROPIC_API_KEY` | Anthropic provider |
-| `OPENAI_API_KEY` | OpenAI provider |
+| `OPENAI_API_KEY` | OpenAI provider + embeddings |
 | `PROJ_JARVIS_PORT` | `gateway.port` |
 | `PROJ_JARVIS_HOST` | `gateway.host` |
 
@@ -457,10 +591,13 @@ Environment overrides (all optional):
 | Network | Reject non-localhost `Origin` headers | `gateway/ws-handler.ts` |
 | Auth | Timing-safe token check via `crypto.timingSafeEqual` | `gateway/auth.ts` |
 | Input | Zod validation on every RPC method params | `gateway/methods/*.ts` |
-| Exec | User approval required before every bash command | `tools/approval.ts` |
+| Exec | User approval required before bash/browser commands | `tools/approval.ts` |
 | Exec | Process timeout (120 s) + output byte cap (100 KB) | `tools/bash.ts` |
+| Browser | Block dangerous URL schemes (file, chrome, javascript) | `tools/browser.ts` |
+| Browser | Refuse to type into password fields | `tools/browser.ts` |
+| Scheduler | Auto-approve only for authenticated user-created jobs | `scheduler/engine.ts` |
 | Output | Regex-based secrets redaction on all tool output | `security/secrets-filter.ts` |
-| Audit | Append-only JSONL audit log for every tool run + auth | `security/audit.ts` |
+| Audit | Append-only JSONL audit log for tool runs, auth, scheduled jobs | `security/audit.ts` |
 | UI | DOMPurify on all markdown-rendered HTML | `ui/src/components/markdown-renderer.ts` |
 
 ---
@@ -475,6 +612,7 @@ Environment overrides (all optional):
 | WebSocket | `ws` npm package | Lightweight, production-proven |
 | AI — Anthropic | `@anthropic-ai/sdk` | Official SDK, streaming support |
 | AI — OpenAI | `openai` npm package | Official SDK, streaming support |
+| Browser | `playwright` | Headless Chromium, reliable automation |
 | Database | `node:sqlite` + `sqlite-vec` extension | Zero-setup, vector search, built-in |
 | UI framework | Lit 3 | Lightweight web components, no virtual DOM |
 | UI build | Vite 6 | Fast HMR dev server, simple config |
@@ -494,3 +632,4 @@ Environment overrides (all optional):
 | 4b | `docs/phases/phase-4b-browser-tool.md` | Browser control via Playwright (navigate, click, screenshot) |
 | 5 | `docs/phases/phase-5-memory.md` | Agent recalls context from past sessions |
 | 6 | `docs/phases/phase-6-ui.md` | Full browser UI, end-to-end |
+| 7 | — | Cron-based scheduler with persistent jobs, auto-approved execution |

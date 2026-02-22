@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { MemoryDb } from '../memory/db.js'
 import type { ModelProvider } from '../agents/providers/types.js'
 import type { Message } from '../agents/providers/types.js'
+import type { ToolDefinition } from '../agents/providers/types.js'
 import type { SessionManager } from '../sessions/manager.js'
 import type { ToolRegistry } from '../tools/registry.js'
 import type { AuditLogger } from '../security/audit.js'
@@ -9,7 +10,7 @@ import type { Config } from '../config/schema.js'
 import type { ToolContext } from '../tools/types.js'
 import { getNextRun, isValidCron } from './cron.js'
 import { runAgentTurn } from '../agents/runner.js'
-import { buildSystemPrompt, getAgentModelRef } from '../agents/prompt-builder.js'
+import { buildSchedulerSystemPrompt, getAgentModelRef } from '../agents/prompt-builder.js'
 import { parseModelRef } from '../agents/model-ref.js'
 import { filterSecrets } from '../security/secrets-filter.js'
 
@@ -58,6 +59,20 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: 'claude-3-5-haiku-latest',
 }
 
+const SCHEDULER_RUNTIME_PREAMBLE = [
+  'You are executing an unattended scheduled job.',
+  'Tool execution is pre-approved in scheduler mode.',
+  'Do not ask the user for approval, confirmation, or permission.',
+  'Do not ask follow-up questions that require a live reply.',
+  'Do not narrate intended actions.',
+  'Return final task output directly.',
+  'Execute the task end-to-end and return concrete output.',
+].join('\n')
+
+const SCHEDULER_RETRY_PROMPT =
+  'Scheduler auto-approval notice: approvals are already granted. ' +
+  'Execute required tools now and return final output. Do not ask for approval.'
+
 function resolveProviderAndModel(
   providers: Map<string, ModelProvider>,
   requestedProvider: string,
@@ -78,6 +93,42 @@ function resolveProviderAndModel(
   const fallbackModel = DEFAULT_MODEL_BY_PROVIDER[fallbackProviderId] ?? requestedModel
 
   return { provider: fallbackProvider, model: fallbackModel }
+}
+
+function schedulerToolDefinitions(defs: ToolDefinition[]): ToolDefinition[] {
+  return defs.map((def) => {
+    if (def.name === 'browser') {
+      return {
+        ...def,
+        description:
+          'Control a headless browser: navigate to URLs, click elements, type text, ' +
+          'take screenshots, and extract page content. In scheduler mode, browser actions ' +
+          'are pre-approved and should execute directly without asking for confirmation.',
+      }
+    }
+
+    if (def.name === 'bash') {
+      return {
+        ...def,
+        description:
+          'Run shell commands. In scheduler mode, command execution is pre-approved ' +
+          'and should execute directly without asking for confirmation.',
+      }
+    }
+
+    return def
+  })
+}
+
+function looksLikeApprovalRequest(text: string): boolean {
+  const normalized = text.toLowerCase()
+  return (
+    normalized.includes('approve') ||
+    normalized.includes('approval') ||
+    normalized.includes('proceed') ||
+    normalized.includes('permission') ||
+    normalized.includes('confirm')
+  )
 }
 
 // ── Row mapper ──
@@ -267,8 +318,12 @@ export class SchedulerEngine {
         throw new Error('No AI providers configured')
       }
 
-      const systemPrompt = await buildSystemPrompt(this.deps.workspacePath)
+      const baseSystemPrompt = await buildSchedulerSystemPrompt(this.deps.workspacePath)
+      const systemPrompt = baseSystemPrompt
+        ? `${SCHEDULER_RUNTIME_PREAMBLE}\n\n---\n\n${baseSystemPrompt}`
+        : SCHEDULER_RUNTIME_PREAMBLE
       const messages: Message[] = [{ role: 'user', content: job.prompt }]
+      const tools = schedulerToolDefinitions(this.deps.toolRegistry.toDefinitions())
 
       // Append user message to session transcript
       await session.appendEvent({
@@ -287,54 +342,73 @@ export class SchedulerEngine {
         autoApprove: true,
       }
 
-      // Accumulate assistant response
-      let assistantText = ''
+      const runTurn = async (turnMessages: Message[]): Promise<{ text: string; toolCalls: number }> => {
+        let text = ''
+        let toolCalls = 0
 
-      // Run the agent turn
-      await runAgentTurn({
-        provider: resolved.provider,
-        model: resolved.model,
-        systemPrompt,
-        messages,
-        tools: this.deps.toolRegistry.toDefinitions(),
-        onEvent: (event) => {
-          if (event.type === 'delta') {
-            assistantText += event.text
-          }
-          // Ignore final/error — we handle them after runAgentTurn resolves
-        },
-        onToolCall: async (name, input, _callId) => {
-          const tool = this.deps.toolRegistry.get(name)
-          if (!tool) return `Error: Unknown tool "${name}"`
+        await runAgentTurn({
+          provider: resolved.provider,
+          model: resolved.model,
+          systemPrompt,
+          messages: turnMessages,
+          tools,
+          onEvent: (event) => {
+            if (event.type === 'delta') {
+              text += event.text
+            }
+            // Ignore final/error — we handle them after runAgentTurn resolves
+          },
+          onToolCall: async (name, input, _callId) => {
+            toolCalls += 1
 
-          const validated = tool.inputSchema.safeParse(input)
-          if (!validated.success) {
-            return `Error: Invalid input for tool "${name}": ${validated.error.message}`
-          }
+            const tool = this.deps.toolRegistry.get(name)
+            if (!tool) return `Error: Unknown tool "${name}"`
 
-          try {
-            const result = await tool.execute(validated.data, toolContext)
-            const filtered = filterSecrets(result.output)
+            const validated = tool.inputSchema.safeParse(input)
+            if (!validated.success) {
+              return `Error: Invalid input for tool "${name}": ${validated.error.message}`
+            }
 
-            // Audit log
-            this.deps.auditLogger.append({
-              ts: Date.now(),
-              type: 'scheduler_run',
-              sessionKey: sessionKey!,
-              details: {
-                tool: name,
-                jobId: job.id,
-                exitCode: result.exitCode,
-                outputLength: filtered.length,
-              },
-            }).catch(() => {})
+            try {
+              const result = await tool.execute(validated.data, toolContext)
+              const filtered = filterSecrets(result.output)
 
-            return filtered
-          } catch (err) {
-            return `Error: ${err instanceof Error ? err.message : 'Tool execution failed'}`
-          }
-        },
-      })
+              // Audit log
+              this.deps.auditLogger.append({
+                ts: Date.now(),
+                type: 'scheduler_run',
+                sessionKey: sessionKey!,
+                details: {
+                  tool: name,
+                  jobId: job.id,
+                  exitCode: result.exitCode,
+                  outputLength: filtered.length,
+                },
+              }).catch(() => {})
+
+              return filtered
+            } catch (err) {
+              return `Error: ${err instanceof Error ? err.message : 'Tool execution failed'}`
+            }
+          },
+        })
+
+        return { text, toolCalls }
+      }
+
+      let turnResult = await runTurn(messages)
+      let assistantText = turnResult.text
+
+      // If the model still asks for approval despite scheduler pre-approval, retry once with a hard nudge.
+      if (turnResult.toolCalls === 0 && looksLikeApprovalRequest(assistantText)) {
+        const retryMessages: Message[] = [
+          ...messages,
+          { role: 'assistant', content: assistantText },
+          { role: 'user', content: SCHEDULER_RETRY_PROMPT },
+        ]
+        turnResult = await runTurn(retryMessages)
+        assistantText = turnResult.text
+      }
 
       // Persist assistant response to session transcript
       if (assistantText) {
@@ -347,7 +421,7 @@ export class SchedulerEngine {
       }
 
       // Success — update records
-      const summary = assistantText.slice(0, 2000) || '(no output)'
+      const summary = assistantText || '(no output)'
       const finishedAt = Date.now()
 
       this.deps.db.prepare(
@@ -362,9 +436,11 @@ export class SchedulerEngine {
       if (this.broadcastEvent) {
         this.broadcastEvent('scheduler.run_completed', {
           jobId: job.id,
+          jobName: job.name,
           runId,
+          sessionKey,
           status: 'success',
-          summary: summary.slice(0, 500),
+          summary,
         })
       }
 
@@ -384,7 +460,9 @@ export class SchedulerEngine {
       if (this.broadcastEvent) {
         this.broadcastEvent('scheduler.run_completed', {
           jobId: job.id,
+          jobName: job.name,
           runId,
+          sessionKey,
           status: 'error',
           error: errMsg,
         })

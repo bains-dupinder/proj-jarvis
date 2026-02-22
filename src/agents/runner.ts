@@ -47,18 +47,18 @@ export async function runAgentTurn(opts: RunnerOptions): Promise<void> {
     }> = []
 
     let textAccumulator = ''
-    let gotFinal = false
+    let finalUsage: { inputTokens: number; outputTokens: number } | null = null
 
     const stream = provider.chat({ model, systemPrompt, messages, tools })
 
     for await (const event of stream) {
-      onEvent(event)
-
       if (event.type === 'delta') {
+        onEvent(event)
         textAccumulator += event.text
       }
 
       if (event.type === 'tool_call') {
+        onEvent(event)
         pendingToolCalls.push({
           name: event.name,
           input: event.input,
@@ -67,16 +67,23 @@ export async function runAgentTurn(opts: RunnerOptions): Promise<void> {
       }
 
       if (event.type === 'final') {
-        gotFinal = true
+        // Defer final emission until we know whether more turns are required.
+        // If tool calls were emitted in this turn, we continue the loop and emit
+        // a single final event after the last turn completes.
+        finalUsage = event.usage
       }
 
       if (event.type === 'error') {
+        onEvent(event)
         return // Stop on error
       }
     }
 
-    // If no tool calls were made, we're done
+    // If no tool calls were made, this is the terminal turn.
     if (pendingToolCalls.length === 0) {
+      if (finalUsage) {
+        onEvent({ type: 'final', usage: finalUsage })
+      }
       return
     }
 

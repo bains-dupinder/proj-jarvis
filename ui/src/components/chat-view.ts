@@ -20,6 +20,16 @@ interface HistoryMessage {
   toolName?: string
 }
 
+interface SchedulerRunCompletedEvent {
+  jobId: string
+  jobName?: string
+  runId: string
+  sessionKey?: string
+  status: 'success' | 'error'
+  summary?: string
+  error?: string
+}
+
 let msgIdCounter = 0
 function nextMsgId(): string {
   return `msg-${++msgIdCounter}`
@@ -162,6 +172,52 @@ export class ChatView extends LitElement {
         this.progressMessage = message
       }),
     )
+
+    this.unsubscribers.push(
+      this.client.on('scheduler.run_completed', (data) => {
+        void this.handleSchedulerRunCompleted(data as SchedulerRunCompletedEvent)
+      }),
+    )
+  }
+
+  private async handleSchedulerRunCompleted(evt: SchedulerRunCompletedEvent): Promise<void> {
+    const label = evt.jobName?.trim() || evt.jobId
+    const header =
+      evt.status === 'success'
+        ? `Scheduled job "${label}" completed.`
+        : `Scheduled job "${label}" failed.`
+
+    let details =
+      evt.status === 'success'
+        ? (evt.summary?.trim() || '(no output)')
+        : `Error: ${evt.error?.trim() || 'Unknown error'}`
+
+    if (evt.status === 'success' && evt.sessionKey) {
+      try {
+        const res = await this.client.request<{ messages: HistoryMessage[] }>(
+          'chat.history',
+          { sessionKey: evt.sessionKey, limit: 200 },
+        )
+
+        const lastAssistant = [...res.messages]
+          .reverse()
+          .find((m) => m.role === 'assistant' && m.content.trim().length > 0)
+
+        if (lastAssistant) {
+          details = lastAssistant.content
+        }
+      } catch {
+        // Fall back to event summary if session fetch fails.
+      }
+    }
+
+    const sessionLine = evt.sessionKey ? `Session: ${evt.sessionKey}\n\n` : ''
+
+    this.messageList?.addMessage({
+      id: nextMsgId(),
+      role: 'assistant',
+      content: `${header}\n\n${sessionLine}${details}`,
+    })
   }
 
   private async handleSend(e: CustomEvent<{ message: string }>) {

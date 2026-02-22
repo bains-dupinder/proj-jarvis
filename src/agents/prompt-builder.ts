@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const WORKSPACE_FILES = ['AGENTS.md', 'SOUL.md', 'TOOLS.md']
+const SCHEDULER_FILE = 'SCHEDULER.md'
 
 /**
  * Build the system prompt by reading and concatenating workspace markdown files.
@@ -22,6 +23,24 @@ export async function buildSystemPrompt(workspacePath: string): Promise<string> 
   }
 
   return sections.join('\n\n---\n\n')
+}
+
+/**
+ * Build a scheduler-specific system prompt.
+ * Includes the normal workspace prompt plus optional scheduler-only overrides.
+ */
+export async function buildSchedulerSystemPrompt(workspacePath: string): Promise<string> {
+  const basePrompt = await buildSystemPrompt(workspacePath)
+
+  try {
+    const schedulerContent = await readFile(join(workspacePath, SCHEDULER_FILE), 'utf-8')
+    const trimmed = schedulerContent.trim()
+    if (!trimmed) return basePrompt
+    if (!basePrompt) return trimmed
+    return `${basePrompt}\n\n---\n\n${trimmed}`
+  } catch {
+    return basePrompt
+  }
 }
 
 /**

@@ -4,6 +4,8 @@
  * Keyword search uses a simple word-matching approach (no FTS5 in node:sqlite).
  */
 
+import { SCHEDULER_MIGRATIONS } from '../scheduler/schema.js'
+
 export const CREATE_FILES_TABLE = `
   CREATE TABLE IF NOT EXISTS files (
     path       TEXT PRIMARY KEY,
@@ -39,4 +41,5 @@ export const ALL_MIGRATIONS: string[] = [
   CREATE_CHUNKS_TABLE,
   CREATE_EMBEDDING_CACHE_TABLE,
   CREATE_CHUNKS_INDEX,
+  ...SCHEDULER_MIGRATIONS,
 ]

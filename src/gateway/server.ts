@@ -26,6 +26,9 @@ import { sessionsCreate, sessionsList, sessionsGet } from './methods/sessions.js
 import { chatSend, chatHistory, chatAbort } from './methods/chat.js'
 import { execApprove, execDeny } from './methods/exec.js'
 import { memorySearch } from './methods/memory.js'
+import { SchedulerEngine } from '../scheduler/engine.js'
+import { ScheduleTool } from '../tools/schedule.js'
+import { schedulerList, schedulerGet, schedulerRuns } from './methods/scheduler.js'
 
 export interface GatewayServer {
   close(): Promise<void>
@@ -106,6 +109,22 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
     ? resolve(config.agents.workspacePath)
     : resolve('workspace')
 
+  // Scheduler
+  let scheduler: SchedulerEngine | null = null
+  if (memoryDb) {
+    scheduler = new SchedulerEngine({
+      db: memoryDb,
+      providers,
+      sessionManager,
+      toolRegistry,
+      auditLogger,
+      config,
+      workspacePath,
+    })
+    toolRegistry.register(new ScheduleTool(scheduler))
+    console.log('  ✓ Scheduler engine ready')
+  }
+
   const methods = new MethodRegistry()
   methods.register('health.check', healthCheck)
   methods.register('agents.list', agentsList)
@@ -118,6 +137,9 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   methods.register('exec.approve', execApprove)
   methods.register('exec.deny', execDeny)
   methods.register('memory.search', memorySearch)
+  methods.register('scheduler.list', schedulerList)
+  methods.register('scheduler.get', schedulerGet)
+  methods.register('scheduler.runs', schedulerRuns)
 
   const httpHandler = createHttpHandler(config)
   const server = createServer(httpHandler)
@@ -127,7 +149,7 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
     wss, methods, config, token,
     providers, workspacePath, sessionManager, activeRuns,
     toolRegistry, approvalManager, auditLogger, browserSessionManager,
-    memoryDb, embedder,
+    memoryDb, embedder, scheduler,
   })
 
   server.on('upgrade', upgradeHandler)
@@ -135,6 +157,19 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
   await new Promise<void>((resolve) => {
     server.listen(config.gateway.port, config.gateway.host, () => resolve())
   })
+
+  // Start scheduler and wire broadcast to WSS
+  if (scheduler) {
+    scheduler.setBroadcast((event: string, data: unknown) => {
+      const msg = JSON.stringify({ event, data })
+      for (const client of wss.clients) {
+        if (client.readyState === client.OPEN) {
+          client.send(msg)
+        }
+      }
+    })
+    scheduler.start()
+  }
 
   console.log(`Listening on ws://${config.gateway.host}:${config.gateway.port}`)
 
@@ -145,6 +180,11 @@ export async function startServer(config: Config, token: string): Promise<Gatewa
         controller.abort()
       }
       activeRuns.clear()
+
+      // Stop scheduler
+      if (scheduler) {
+        scheduler.stop()
+      }
 
       // Close browser sessions
       await browserSessionManager.closeAll()

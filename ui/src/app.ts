@@ -115,6 +115,7 @@ export class JarvisApp extends LitElement {
   private activeSessionKey: string | null = null
 
   private client: WsClient | null = null
+  private appUnsubscribers: Array<() => void> = []
 
   async connectedCallback() {
     super.connectedCallback()
@@ -124,6 +125,12 @@ export class JarvisApp extends LitElement {
     if (saved) {
       await this.tryConnect(saved)
     }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback()
+    for (const unsub of this.appUnsubscribers) unsub()
+    this.appUnsubscribers = []
   }
 
   private async tryConnect(token: string) {
@@ -138,6 +145,13 @@ export class JarvisApp extends LitElement {
       this.client = client
       this.authenticated = true
       setToken(token)
+      for (const unsub of this.appUnsubscribers) unsub()
+      this.appUnsubscribers = []
+      this.appUnsubscribers.push(
+        client.on('scheduler.run_completed', () => {
+          this.loadSessions().catch((err) => console.error('Failed to refresh sessions:', err))
+        }),
+      )
       await this.loadSessions()
     } catch (err) {
       this.authError = err instanceof Error ? err.message : 'Connection failed'

@@ -86,4 +86,24 @@ export class SessionManager {
       // Best effort — don't throw if meta file is missing
     }
   }
+
+  /**
+   * Set a human-friendly session label.
+   */
+  async setLabel(key: string, label: string): Promise<void> {
+    const trimmed = label.trim()
+    if (!trimmed) return
+
+    const metaPath = join(this.sessionsDir, `${key}.meta.json`)
+
+    try {
+      const raw = await readFile(metaPath, 'utf-8')
+      const meta = JSON.parse(raw) as SessionMeta
+      meta.label = trimmed.slice(0, 120)
+      meta.updatedAt = Date.now()
+      await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
+    } catch {
+      // Best effort — don't throw if meta file is missing
+    }
+  }
 }

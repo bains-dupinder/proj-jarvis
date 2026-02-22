@@ -31,6 +31,13 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: 'claude-3-5-haiku-latest',
 }
 
+function summarizeSessionLabel(text: string, maxLen: number = 56): string | null {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
+  if (normalized.length <= maxLen) return normalized
+  return `${normalized.slice(0, maxLen - 1).trimEnd()}…`
+}
+
 function resolveProviderAndModel(
   providers: Map<string, ModelProvider>,
   requestedProvider: string,
@@ -97,6 +104,7 @@ export const chatSend: MethodHandler = async (params, ctx) => {
   // Read existing transcript for conversation context
   const existingEvents = await session.readEvents()
   const messages: Message[] = transcriptToMessages(existingEvents)
+  const shouldSetLabel = !existingEvents.some((e) => e.role === 'user')
 
   // Append user message to transcript
   const userEvent: TranscriptEvent = {
@@ -106,6 +114,12 @@ export const chatSend: MethodHandler = async (params, ctx) => {
   }
   await session.appendEvent(userEvent)
   messages.push({ role: 'user', content: message })
+  if (shouldSetLabel) {
+    const label = summarizeSessionLabel(message)
+    if (label) {
+      ctx.sessionManager.setLabel(sessionKey, label).catch(() => {})
+    }
+  }
 
   // Resolve provider
   const agentId = session.meta.agentId
@@ -211,6 +225,22 @@ export const chatSend: MethodHandler = async (params, ctx) => {
             runId,
             tool: name,
             attachments: result.attachments,
+          })
+        }
+
+        // Push bash output so users can see command results even if the model response is terse.
+        if (name === 'bash') {
+          const maxPreview = 8_000
+          const preview =
+            filteredOutput.length > maxPreview
+              ? `${filteredOutput.slice(0, maxPreview)}\n\n[output truncated]`
+              : filteredOutput
+
+          ctx.sendEvent('chat.tool_result', {
+            runId,
+            tool: name,
+            exitCode: result.exitCode,
+            output: preview,
           })
         }
 

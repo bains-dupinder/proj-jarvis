@@ -10,6 +10,13 @@ const GetParams = z.object({
   sessionKey: z.string().uuid(),
 })
 
+function summarizeLabel(text: string, maxLen: number = 56): string | null {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
+  if (normalized.length <= maxLen) return normalized
+  return `${normalized.slice(0, maxLen - 1).trimEnd()}…`
+}
+
 /**
  * sessions.create — create a new session
  */
@@ -20,7 +27,7 @@ export const sessionsCreate: MethodHandler = async (params, ctx) => {
   }
 
   const session = await ctx.sessionManager.create(parsed.data.agentId)
-  return { sessionKey: session.meta.key }
+  return { sessionKey: session.meta.key, meta: session.meta }
 }
 
 /**
@@ -28,7 +35,24 @@ export const sessionsCreate: MethodHandler = async (params, ctx) => {
  */
 export const sessionsList: MethodHandler = async (_params, ctx) => {
   const sessions = await ctx.sessionManager.list()
-  return { sessions }
+
+  const enriched = await Promise.all(sessions.map(async (meta) => {
+    if (meta.label?.trim()) return meta
+
+    const session = await ctx.sessionManager.get(meta.key)
+    if (!session) return meta
+
+    const events = await session.readEvents()
+    const firstUser = events.find((e) => e.role === 'user' && e.content.trim().length > 0)
+    const derived = firstUser ? summarizeLabel(firstUser.content) : null
+
+    if (!derived) return meta
+
+    ctx.sessionManager.setLabel(meta.key, derived).catch(() => {})
+    return { ...meta, label: derived }
+  }))
+
+  return { sessions: enriched }
 }
 
 /**

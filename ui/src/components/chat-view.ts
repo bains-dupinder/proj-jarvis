@@ -126,27 +126,14 @@ export class ChatView extends LitElement {
         return
       }
 
-      const msgs: ChatMessage[] = []
-      for (const msg of res.messages) {
-        if (msg.role === 'user' || msg.role === 'assistant') {
-          msgs.push({
-            id: nextMsgId(),
-            role: msg.role,
-            content: msg.content,
-            runId: msg.runId,
-          })
-          continue
-        }
-
-        if (msg.role === 'tool_result' && msg.toolName === 'bash') {
-          msgs.push({
-            id: nextMsgId(),
-            role: 'assistant',
-            content: `**Bash Output:**\n\`\`\`\n${msg.content}\n\`\`\``,
-            runId: msg.runId,
-          })
-        }
-      }
+      const msgs: ChatMessage[] = res.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({
+          id: nextMsgId(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          runId: m.runId,
+        }))
 
       // Wait for first render so messageList exists
       await this.updateComplete

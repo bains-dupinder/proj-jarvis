@@ -149,26 +149,30 @@ export class BrowserTool implements Tool {
     }
 
     const { actions, sessionId } = parsed.data
-    const approvalId = randomUUID()
 
-    // Push approval request
-    context.sendEvent('exec.approval_request', {
-      approvalId,
-      toolName: this.name,
-      summary: `${actions.length} browser action(s) — first: ${describeAction(actions[0]!)}`,
-      details: { actions: actions.map(describeAction) },
-    })
+    // Skip approval for auto-approved contexts (e.g. scheduled jobs)
+    if (!context.autoApprove) {
+      const approvalId = randomUUID()
 
-    // Wait for approval
-    try {
-      await this.approvalManager.request(approvalId)
-    } catch (err) {
-      if (err instanceof DeniedError) {
-        return {
-          output: `Browser actions denied by user${err.message !== 'Denied by user' ? ': ' + err.message : '.'}`,
+      // Push approval request
+      context.sendEvent('exec.approval_request', {
+        approvalId,
+        toolName: this.name,
+        summary: `${actions.length} browser action(s) — first: ${describeAction(actions[0]!)}`,
+        details: { actions: actions.map(describeAction) },
+      })
+
+      // Wait for approval
+      try {
+        await this.approvalManager.request(approvalId)
+      } catch (err) {
+        if (err instanceof DeniedError) {
+          return {
+            output: `Browser actions denied by user${err.message !== 'Denied by user' ? ': ' + err.message : '.'}`,
+          }
         }
+        throw err
       }
-      throw err
     }
 
     // Get or create browser page

@@ -3,7 +3,7 @@ import { filterSecrets } from './secrets-filter.js'
 
 export interface AuditEvent {
   ts: number // Unix ms
-  type: 'auth' | 'tool_exec' | 'tool_denied' | 'config_change'
+  type: 'auth' | 'tool_exec' | 'tool_denied' | 'config_change' | 'scheduler_run'
   sessionKey?: string
   details: Record<string, unknown>
 }

@@ -7,6 +7,7 @@ import type { AuditLogger } from '../../security/audit.js'
 import type { BrowserSessionManager } from '../../tools/browser-session.js'
 import type { MemoryDb } from '../../memory/db.js'
 import type { EmbeddingProvider } from '../../memory/embeddings.js'
+import type { SchedulerEngine } from '../../scheduler/engine.js'
 
 export interface MethodContext {
   sendEvent(event: string, data: unknown): void
@@ -22,6 +23,7 @@ export interface MethodContext {
   browserSessionManager: BrowserSessionManager
   memoryDb: MemoryDb | null
   embedder: EmbeddingProvider | null
+  scheduler: SchedulerEngine | null
 }
 
 export type MethodHandler = (params: unknown, ctx: MethodContext) => Promise<unknown>

@@ -15,6 +15,8 @@ export interface ToolContext {
   sendEvent: (event: string, data: unknown) => void
   reportProgress: (message: string) => void
   config: Config
+  /** When true, skip interactive approval (used by scheduler for unattended execution). */
+  autoApprove?: boolean
 }
 
 export interface Tool {

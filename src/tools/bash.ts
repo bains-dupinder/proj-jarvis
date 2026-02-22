@@ -72,27 +72,31 @@ export class BashTool implements Tool {
 
     const { command, workingDir } = parsed.data
     const cwd = workingDir ?? process.cwd()
-    const approvalId = randomUUID()
 
-    // Push approval request to client
-    context.sendEvent('exec.approval_request', {
-      approvalId,
-      toolName: this.name,
-      summary: command,
-      details: { command, workingDir: cwd },
-    })
+    // Skip approval for auto-approved contexts (e.g. scheduled jobs)
+    if (!context.autoApprove) {
+      const approvalId = randomUUID()
 
-    // Wait for user approval
-    try {
-      await this.approvalManager.request(approvalId)
-    } catch (err) {
-      if (err instanceof DeniedError) {
-        return {
-          output: `Command denied by user${err.message !== 'Denied by user' ? ': ' + err.message : '.'}`,
-          exitCode: 1,
+      // Push approval request to client
+      context.sendEvent('exec.approval_request', {
+        approvalId,
+        toolName: this.name,
+        summary: command,
+        details: { command, workingDir: cwd },
+      })
+
+      // Wait for user approval
+      try {
+        await this.approvalManager.request(approvalId)
+      } catch (err) {
+        if (err instanceof DeniedError) {
+          return {
+            output: `Command denied by user${err.message !== 'Denied by user' ? ': ' + err.message : '.'}`,
+            exitCode: 1,
+          }
         }
+        throw err
       }
-      throw err
     }
 
     // Approved — execute the command

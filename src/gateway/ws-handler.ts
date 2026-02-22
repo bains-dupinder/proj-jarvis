@@ -10,6 +10,7 @@ import type { AuditLogger } from '../security/audit.js'
 import type { BrowserSessionManager } from '../tools/browser-session.js'
 import type { MemoryDb } from '../memory/db.js'
 import type { EmbeddingProvider } from '../memory/embeddings.js'
+import type { SchedulerEngine } from '../scheduler/engine.js'
 import type { MethodContext } from './methods/types.js'
 import { MethodRegistry, RpcError } from './methods/registry.js'
 import { verifyToken } from './auth.js'
@@ -49,6 +50,7 @@ export interface WsHandlerDeps {
   browserSessionManager: BrowserSessionManager
   memoryDb: MemoryDb | null
   embedder: EmbeddingProvider | null
+  scheduler: SchedulerEngine | null
 }
 
 export function createWsUpgradeHandler(deps: WsHandlerDeps) {
@@ -136,6 +138,7 @@ function handleConnection(ws: WebSocket, deps: WsHandlerDeps): void {
       browserSessionManager: deps.browserSessionManager,
       memoryDb: deps.memoryDb,
       embedder: deps.embedder,
+      scheduler: deps.scheduler,
     }
 
     try {

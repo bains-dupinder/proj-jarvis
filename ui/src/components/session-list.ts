@@ -7,6 +7,7 @@ export interface SessionMeta {
   agentId: string
   createdAt: number
   updatedAt: number
+  label?: string
 }
 
 @customElement('jarvis-session-list')
@@ -110,6 +111,10 @@ export class SessionList extends LitElement {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
   }
 
+  private shortKey(key: string): string {
+    return key.slice(0, 8)
+  }
+
   render() {
     return html`
       <div class="header">
@@ -125,8 +130,8 @@ export class SessionList extends LitElement {
               class="session-item ${s.key === this.activeKey ? 'active' : ''}"
               @click=${() => this.handleSelect(s.key)}
             >
-              <div class="agent">${s.agentId}</div>
-              <div class="date">${this.formatDate(s.updatedAt)}</div>
+              <div class="agent">${s.label?.trim() || s.agentId}</div>
+              <div class="date">${this.formatDate(s.updatedAt)} · ${this.shortKey(s.key)}</div>
             </div>
           `,
         )}

@@ -54,9 +54,11 @@ export class MessageItem extends LitElement {
   streaming = false
 
   render() {
+    const roleLabel = this.role === 'assistant' ? 'jarvis' : this.role
+
     return html`
       <div class="message message--${this.role}">
-        <div class="role-label">${this.role}</div>
+        <div class="role-label">${roleLabel}</div>
         <jarvis-markdown .content=${this.content}></jarvis-markdown>
         ${this.streaming ? html`<span class="cursor">▋</span>` : ''}
       </div>

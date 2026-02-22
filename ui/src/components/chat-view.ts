@@ -1,4 +1,5 @@
 import { LitElement, html, css } from 'lit'
+import type { PropertyValues } from 'lit'
 import { customElement, property, state, query } from 'lit/decorators.js'
 import type { WsClient } from '../ws-client.js'
 import type { MessageList, ChatMessage } from './message-list.js'
@@ -28,6 +29,13 @@ interface SchedulerRunCompletedEvent {
   status: 'success' | 'error'
   summary?: string
   error?: string
+}
+
+interface ChatToolResultEvent {
+  runId: string
+  tool: string
+  output: string
+  exitCode?: number
 }
 
 let msgIdCounter = 0
@@ -73,6 +81,7 @@ export class ChatView extends LitElement {
   private unsubscribers: Array<() => void> = []
   private currentRunId = ''
   private hasStreamingAssistant = false
+  private historyRequestId = 0
 
   async connectedCallback() {
     super.connectedCallback()
@@ -86,21 +95,58 @@ export class ChatView extends LitElement {
     this.unsubscribers = []
   }
 
+  protected updated(changed: PropertyValues<this>) {
+    if (changed.has('sessionKey')) {
+      this.resetViewState()
+      void this.loadHistory()
+    }
+  }
+
+  private resetViewState() {
+    this.streaming = false
+    this.pendingApproval = null
+    this.progressMessage = ''
+    this.currentRunId = ''
+    this.hasStreamingAssistant = false
+    this.messageList?.setMessages([])
+  }
+
   private async loadHistory() {
+    const requestId = ++this.historyRequestId
+    const targetSession = this.sessionKey
+
     try {
       const res = await this.client.request<{ messages: HistoryMessage[] }>(
         'chat.history',
-        { sessionKey: this.sessionKey },
+        { sessionKey: targetSession },
       )
 
-      const msgs: ChatMessage[] = res.messages
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          id: nextMsgId(),
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          runId: m.runId,
-        }))
+      // Ignore stale responses from an older session selection.
+      if (requestId !== this.historyRequestId || targetSession !== this.sessionKey) {
+        return
+      }
+
+      const msgs: ChatMessage[] = []
+      for (const msg of res.messages) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          msgs.push({
+            id: nextMsgId(),
+            role: msg.role,
+            content: msg.content,
+            runId: msg.runId,
+          })
+          continue
+        }
+
+        if (msg.role === 'tool_result' && msg.toolName === 'bash') {
+          msgs.push({
+            id: nextMsgId(),
+            role: 'assistant',
+            content: `**Bash Output:**\n\`\`\`\n${msg.content}\n\`\`\``,
+            runId: msg.runId,
+          })
+        }
+      }
 
       // Wait for first render so messageList exists
       await this.updateComplete
@@ -176,6 +222,23 @@ export class ChatView extends LitElement {
     this.unsubscribers.push(
       this.client.on('scheduler.run_completed', (data) => {
         void this.handleSchedulerRunCompleted(data as SchedulerRunCompletedEvent)
+      }),
+    )
+
+    this.unsubscribers.push(
+      this.client.on('chat.tool_result', (data) => {
+        const evt = data as ChatToolResultEvent
+        if (!this.currentRunId && this.streaming) {
+          this.currentRunId = evt.runId
+          this.ensureStreamingAssistant(evt.runId)
+        }
+
+        if (evt.runId !== this.currentRunId) return
+        if (evt.tool !== 'bash') return
+
+        const header = `\n\n**Bash Output** (exit ${evt.exitCode ?? 'n/a'}):\n`
+        const body = `\`\`\`\n${evt.output}\n\`\`\``
+        this.messageList?.addDelta(evt.runId, `${header}${body}`)
       }),
     )
   }

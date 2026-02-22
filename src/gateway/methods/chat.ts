@@ -244,10 +244,15 @@ export const chatSend: MethodHandler = async (params, ctx) => {
           })
         }
 
-        // Persist tool result to transcript (with attachment metadata, not data)
+        // Persist tool result to transcript (with attachment metadata, not data).
+        // For bash, avoid storing raw command output in transcript history.
+        const persistedToolContent = name === 'bash'
+          ? `Bash command executed (exit ${result.exitCode ?? 'unknown'}, output ${filteredOutput.length} chars${result.truncated ? ', truncated' : ''}). Raw output not persisted.`
+          : filteredOutput
+
         session.appendEvent({
           role: 'tool_result',
-          content: filteredOutput,
+          content: persistedToolContent,
           timestamp: Date.now(),
           runId,
           toolName: name,
